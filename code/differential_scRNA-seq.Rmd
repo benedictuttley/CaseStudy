@@ -1,0 +1,220 @@
+---
+title: "Differential scRNA-seq"
+author: "Benedict"
+date: "18/02/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd(paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubun",
+             "tuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStu",
+             "dy/code"))
+
+# Load Dependencies
+packages <- c("tidyverse",  "Seurat", "cowplot")
+install.packages(packages)
+lapply(packages, library, character.only = TRUE)
+```
+
+
+```{r data_import}
+naive.data <- Read10X(data.dir = paste0("../data/FastFile-ozSePqYiKKANUG8n/dat",
+                                        "a2/scrnaseq/X31-OVA-D0/filtered_featu",
+                                        "re_bc_matrix"))
+effector.data <- Read10X(data.dir = paste0("../data/FastFile-ozSePqYiKKANUG8n/",
+                                        "data2/scrnaseq/X31-OVA-D3/filtered_fe",
+                                        "ature_bc_matrix"))
+rownames(effector.data) <- toupper(rownames(effector.data))
+rownames(naive.data)<- toupper(rownames(naive.data))
+print(paste0("Number of cells in first: ", ncol(naive.data)))
+print(paste0("Number of cells in second: ", ncol(effector.data)))
+```
+
+
+```{r create_seurat_objects, echo=FALSE}
+naive <- CreateSeuratObject(counts=naive.data, project = "differntial_test",
+                            min.cells = 3, min.features = 200)
+naive@meta.data$state <- "Naive"
+effector <- CreateSeuratObject(counts=effector.data, project = "differntial_test",
+                               min.cells = 3, min.features = 200)
+effector@meta.data$state <- "Effector"
+```
+
+``` {r qc_a_1}
+head(effector@meta.data)
+mt.genes <- rownames(effector)[grep("^MT-",rownames(effector))]
+C<-GetAssayData(object = effector, slot = "counts")
+
+percent.mito <- colSums(C[mt.genes,])/Matrix::colSums(C)*100
+effector <- AddMetaData(effector, percent.mito, col.name = "percent.mito")
+
+rb.genes <- rownames(effector)[grep("^RP[SL]",rownames(effector))]
+
+percent.ribo <- colSums(C[rb.genes,])/Matrix::colSums(C)*100
+effector <- AddMetaData(effector, percent.ribo, col.name = "percent.ribo")
+```
+``` {r qc_b_1}
+head(naive@meta.data)
+mt.genes <- rownames(naive)[grep("^MT-",rownames(naive))]
+C<-GetAssayData(object = naive, slot = "counts")
+
+percent_mito <- colSums(C[mt.genes,])/Matrix::colSums(C)*100
+naive <- AddMetaData(naive, percent_mito, col.name = "percent_mito")
+
+rb.genes <- rownames(naive)[grep("^RP[SL]",rownames(naive))]
+
+percent.ribo <- colSums(C[rb.genes,])/Matrix::colSums(C)*100
+naive <- AddMetaData(naive, percent.ribo, col.name = "percent.ribo")
+
+# Percentage hemoglobin genes - includes all genes starting with HB except HBP.
+naive <- PercentageFeatureSet(naive, "^HB[^(P)]", col.name = "percent.hb")
+
+naive <- PercentageFeatureSet(naive, "PECAM1|PF4", col.name = "percent.plat")
+```
+
+``` {r qc_vis}
+VlnPlot(effector, features = c("percent.mito", "percent.ribo"), pt.size = 0.1) + NoLegend()
+```
+``` {r qc_vis}
+VlnPlot(naive, features = c("percent_mito", "percent.ribo"), pt.size = 0.1) + NoLegend()
+```
+``` {r}
+# Compute the relative expression of each gene per cell Use sparse matrix
+# operations, if your dataset is large, doing matrix devisions the regular way
+# will take a very long time.
+naive <- PercentageFeatureSet(naive, "^MT-", col.name = "percent_mito")
+
+# Filter MALAT1
+naive <- naive[!grepl("MALAT1", rownames(naive)), ]
+
+# Filter Mitocondrial
+naive <- naive[!grepl("^MT-", rownames(naive)), ]
+
+# Filter Ribossomal gene (optional if that is a problem on your data) data.filt
+# <- data.filt[ ! grepl('^RP[SL]', rownames(data.filt)), ]
+
+# Filter Hemoglobin gene (optional if that is a problem on your data)
+naive <- naive[!grepl("^HB[^(P)]", rownames(naive)), ]
+
+```
+
+``` {r}
+# Compute the relative expression of each gene per cell Use sparse matrix
+# operations, if your dataset is large, doing matrix devisions the regular way
+# will take a very long time.
+effector <- PercentageFeatureSet(effector, "^MT-", col.name = "percent_mito")
+
+# Filter MALAT1
+effector <- effector[!grepl("MALAT1", rownames(effector)), ]
+
+# Filter Mitocondrial
+effector <- effector[!grepl("^MT-", rownames(effector)), ]
+
+# Filter Ribossomal gene (optional if that is a problem on your data) data.filt
+# <- data.filt[ ! grepl('^RP[SL]', rownames(data.filt)), ]
+
+# Filter Hemoglobin gene (optional if that is a problem on your data)
+effector <- effector[!grepl("^HB[^(P)]", rownames(effector)), ]
+
+```
+
+
+``` {r filtering}
+```
+
+``` {r normalise, echo=FALSE}
+naive <- NormalizeData(naive, normalization.method = "LogNormalize",
+                       scale.factor = 10000)
+effector <- NormalizeData(effector, normalization.method = "LogNormalize",
+                          scale.factor = 10000)
+```
+
+``` {r combine, echo=FALSE}
+states_list <- c(naive, effector)
+states_list <- lapply(X = states_list, FUN = function(x) {
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+# Select features repeatedly variable across datasets for integration
+features <- SelectIntegrationFeatures(object.list = states_list)
+
+# Perform Integration
+immune.anchors <- FindIntegrationAnchors(object.list = states_list, 
+                                         anchor.features = features)
+immune.combined <- IntegrateData(anchorset = immune.anchors)
+
+# Run the standard workflow for visualization and clustering
+immune.combined <- ScaleData(immune.combined, verbose = FALSE)
+immune.combined <- RunPCA(immune.combined, npcs = 30, verbose = FALSE)
+immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 1:30)
+immune.combined <- FindNeighbors(immune.combined, reduction = "pca", dims = 1:30)
+immune.combined <- FindClusters(immune.combined, resolution = 0.5)
+```
+
+``` {r visualise, echo=FALSE}
+p1 <- DimPlot(immune.combined, reduction = "umap", group.by = "state")
+p2 <- DimPlot(immune.combined, reduction = "umap", label = TRUE)
+plot_grid(p1, p2)
+```
+
+```{r Identify conserved cell type markers, echo=FALSE}
+DefaultAssay(immune.combined) <- "RNA"
+nk.markers <- FindConservedMarkers(immune.combined, ident.1 = 4,
+                                   grouping.var = "state", verbose = FALSE)
+```
+
+``` {r}
+# Canonical marker exploration
+FeaturePlot(immune.combined, features = c("CRTAM", "TNFRSF9", "SELL", "GZMB"), min.cutoff = "q4")
+```
+
+``` {r}
+# Canonical to both
+FeaturePlot(immune.combined, features = c("CD69", "CRTAM", "REL", "EGR2"), min.cutoff = "q4")
+```
+```{r}
+FeaturePlot(immune.combined, features = c("HIST1H1B", "HIST1H3C", "TOP2A", "PRC1"))
+
+```
+
+``` {r}
+    FeaturePlot(immune.combined, features = c("KLF2", "BTG1"), split.by = "state", cols = c("grey", "red"))
+
+```
+``` {r}
+    FeaturePlot(immune.combined, features = c("DAPL1", "ADAM17"), split.by = "state", cols = c("grey", "red"))
+
+```
+
+```{r}
+plots <- VlnPlot(immune.combined, features = c("ADAM17", "SELL"), split.by = "state",
+                 pt.size = 0, combine = FALSE)
+plots
+```
+```{r}
+
+immune.combined.markers <- FindAllMarkers(object = immune.combined, only.pos = TRUE, min.pct = 0.25, thresh.use = 0.25)
+immune.combined.markers %>% group_by(cluster) %>% top_n(2, avg_log2FC)
+```
+
+```{r}
+top2 <- immune.combined.markers %>% group_by(cluster) %>% top_n(2, avg_log2FC)
+# setting slim.col.label to TRUE will print just the cluster IDS instead of
+# every cell name
+immune.combined <- ScaleData(immune.combined, verbose = FALSE)
+DoHeatmap(object = immune.combined, features = c("ADAM17", "SELL", "KLF2", "LEF1", "IL7R", "GZMB", "GZMK", "EOMES", "CCL5", "KLRG1", "NKG7", "ZEB2","IFNG", "CCL3", "CCL4", "TNFRSF9", "LIF", "IL2", "CD8A", "CD8B1"), label = TRUE, assay = "RNA",)
+```
+
+```{r dotplot, echo=FALSE}
+markers.to.plot <- c("Cd8a", "Cd8b1", "Sell", "Adam17")
+DotPlot(immune.combined, features = rev(markers.to.plot), cols = c("blue", "red"),
+        dot.scale = 8, split.by = "state") + RotatedAxis()
+
+```
+
+```{r compare_states}
+res <- FindMarkers(immune.combined, ident.1 = c(0,6), ident.2 = c(1,2,3,4,5,7), verbose = FALSE)
+View(res)
+
+```
