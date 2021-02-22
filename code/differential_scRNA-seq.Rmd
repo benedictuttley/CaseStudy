@@ -19,6 +19,7 @@ lapply(packages, library, character.only = TRUE)
 
 
 ```{r data_import}
+
 naive.data <- Read10X(data.dir = paste0("../data/FastFile-ozSePqYiKKANUG8n/dat",
                                         "a2/scrnaseq/X31-OVA-D0/filtered_featu",
                                         "re_bc_matrix"))
@@ -149,13 +150,19 @@ immune.combined <- ScaleData(immune.combined, verbose = FALSE)
 immune.combined <- RunPCA(immune.combined, npcs = 30, verbose = FALSE)
 immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 1:30)
 immune.combined <- FindNeighbors(immune.combined, reduction = "pca", dims = 1:30)
-immune.combined <- FindClusters(immune.combined, resolution = 0.5)
+```
+
+```{r}
+immune.combined <- FindClusters(immune.combined,
+  resolution = c(0.1))
 ```
 
 ``` {r visualise, echo=FALSE}
-p1 <- DimPlot(immune.combined, reduction = "umap", group.by = "state")
+p1 <- DimPlot(immune.combined, reduction = "umap", group.by = "state", label = TRUE)
 p2 <- DimPlot(immune.combined, reduction = "umap", label = TRUE)
-plot_grid(p1, p2)
+save_plot("state.png", p1)
+save_plot("clusters.png", p2)
+p1
 ```
 
 ```{r Identify conserved cell type markers, echo=FALSE}
@@ -166,7 +173,9 @@ nk.markers <- FindConservedMarkers(immune.combined, ident.1 = 4,
 
 ``` {r}
 # Canonical marker exploration
-FeaturePlot(immune.combined, features = c("CRTAM", "TNFRSF9", "SELL", "GZMB"), min.cutoff = "q4")
+plt3 <- FeaturePlot(immune.combined, features = c("ADAM17"))
+save_plot("sell_and_adam.png", plt3)
+plt3
 ```
 
 ``` {r}
@@ -179,7 +188,7 @@ FeaturePlot(immune.combined, features = c("HIST1H1B", "HIST1H3C", "TOP2A", "PRC1
 ```
 
 ``` {r}
-    FeaturePlot(immune.combined, features = c("KLF2", "BTG1"), split.by = "state", cols = c("grey", "red"))
+    FeaturePlot(immune.combined, features = c("SELL", "ADAM17"), split.by = "state", cols = c("grey", "red"))
 
 ```
 ``` {r}
@@ -194,16 +203,25 @@ plots
 ```
 ```{r}
 
-immune.combined.markers <- FindAllMarkers(object = immune.combined, only.pos = TRUE, min.pct = 0.25, thresh.use = 0.25)
-immune.combined.markers %>% group_by(cluster) %>% top_n(2, avg_log2FC)
+#immune.combined.markers <- FindAllMarkers(object = immune.combined)
+#a <- immune.combined.markers %>% group_by(cluster) %>% top_n(15, avg_log2FC)
+immune.combined.markers$genes <- rownames(immune.combined.markers)
+View(immune.combined.markers)
+```
+```{r}
+View(rownames(immune.combined.markers))
 ```
 
 ```{r}
-top2 <- immune.combined.markers %>% group_by(cluster) %>% top_n(2, avg_log2FC)
+#top2 <- immune.combined.markers %>% group_by(cluster) %>% top_n(2, avg_log2FC)
 # setting slim.col.label to TRUE will print just the cluster IDS instead of
 # every cell name
-immune.combined <- ScaleData(immune.combined, verbose = FALSE)
-DoHeatmap(object = immune.combined, features = c("ADAM17", "SELL", "KLF2", "LEF1", "IL7R", "GZMB", "GZMK", "EOMES", "CCL5", "KLRG1", "NKG7", "ZEB2","IFNG", "CCL3", "CCL4", "TNFRSF9", "LIF", "IL2", "CD8A", "CD8B1"), label = TRUE, assay = "RNA",)
+#immune.combined <- ScaleData(immune.combined, verbose = FALSE)
+# DoHeatmap(object = immune.combined, features = c("ADAM17", "SELL", "KLF2", "LEF1", "IL7R", "GZMB", "GZMK", "EOMES", "CCL5", "KLRG1", "NKG7", "ZEB2","IFNG", "CCL3", "CCL4", "TNFRSF9", "LIF", "IL2", "CD8A", "CD8B1"), label = TRUE,)
+a <- DoHeatmap(immune.combined, features=c('CCL4', 'XCL1', 'NCL', 'KLF2', 'DAPL1', 'BTG1', 'SELL', 'XIST', 'GM26917', 'CD8A', 'CD8B1', 'GZMB')) + 
+  scale_fill_gradientn(colors = c("blue", "white", "red"))
+save_plot("heatmap.png", a)
+a
 ```
 
 ```{r dotplot, echo=FALSE}

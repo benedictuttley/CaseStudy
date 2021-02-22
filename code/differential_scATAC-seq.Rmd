@@ -1,0 +1,265 @@
+---
+title: "differential_scATAC-seq"
+author: "Benedict"
+date: "22/02/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+setwd(paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubun",
+             "tuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStu",
+             "dy/code"))
+
+# Load Dependencies
+packages <- c("tidyverse",  "Seurat", "Signac", "cowplot")
+install.packages(packages)
+lapply(packages, library, character.only = TRUE)
+BiocManager::install("hdf5r")
+library(hdf5r)
+```
+
+
+
+```{r data_import}
+counts <- Read10X_h5("../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div0/filtered_peak_bc_matrix.h5")
+
+counts_alt <- Read10X_h5("../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div3/filtered_peak_bc_matrix.h5")
+
+print(paste0("Number of cells in first: ", ncol(counts)))
+print(paste0("Number of cells in second: ", ncol(counts_alt)))
+```
+
+
+
+```{r metadata}
+metadata <- read.csv(
+  file = "../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div0/singlecell.csv",
+  header = TRUE,
+  row.names = 1)
+
+metadata_alt <- read.csv(
+  file = "../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div3/singlecell.csv",
+  header = TRUE,
+  row.names = 1)
+```
+
+```{r construct_seurat_object}
+assay <- CreateChromatinAssay(
+  counts = counts,
+  sep = c(":", "-"),
+  genome = "mm10",
+  fragments = '../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div0/fragments.tsv.gz',
+  min.cells = 1
+)
+
+so <- CreateSeuratObject(
+  counts = assay,
+  assay = 'peaks',
+  project = 'ATAC',
+  meta.data = metadata
+)
+```
+```{r construct_second_seurat_object}
+assay_alt <- CreateChromatinAssay(
+  counts = counts_alt,
+  sep = c(":", "-"),
+  genome = "mm10",
+  fragments = '../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div3/fragments.tsv.gz',
+  min.cells = 1
+)
+
+so_alt <- CreateSeuratObject(
+  counts = assay_alt,
+  assay = 'peaks',
+  project = 'ATAC',
+  meta.data = metadata_alt
+)
+```
+```{r merge}
+
+combined <- merge(
+  x = so,
+  y = so_alt,
+  add.cell.ids = c("so", "so_alt")
+)
+combined[["ATAC"]]
+```
+
+```{r add_annotations}
+library(GenomeInfoDb)
+library(EnsDb.Mmusculus.v79)
+# extract gene annotations from EnsDb
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
+
+# change to UCSC style since the data was mapped to hg19
+seqlevelsStyle(annotations) <- 'UCSC'
+genome(annotations) <- "mm10"
+
+# add the gene information to the object
+Annotation(so) <- annotations
+```
+
+```{r}
+
+# change to UCSC style since the data was mapped to hg19
+seqlevelsStyle(annotations) <- 'UCSC'
+genome(annotations) <- "mm10"
+
+# add the gene information to the object
+Annotation(so_alt) <- annotations
+```
+
+``` {r QC_tss_score}
+so <- TSSEnrichment(object = so, fast = FALSE)
+so$high.tss <- ifelse(so$TSS.enrichment > 2, 'High', 'Low')
+TSSPlot(so, group.by = "high.tss")
+```
+```{r nucleosome_signal}
+so <- NucleosomeSignal(object = so)
+```
+
+```{r QC_blacklist_ratio}
+so$blacklist_ratio <- so$blacklist_region_fragments / so$peak_region_fragments
+```
+
+```{r QC_pct_reads_in_peaks}
+so$pct_reads_in_peaks <- so$peak_region_fragments / so$passed_filters * 100
+```
+
+```{r qc_plot}
+atac_qc_plot <- VlnPlot(
+  object = so,
+  features = c('nucleosome_signal', 'blacklist_ratio', 'pct_reads_in_peaks',
+               'peak_region_fragments', 'TSS.enrichment'),
+  pt.size = 0.1,
+  ncol = 5
+)
+atac_qc_plot
+save_plot("atac_qc.png", atac_qc_plot)
+```
+
+```{r qc_apply_constraints}
+so <- subset(
+  x = so,
+  subset = peak_region_fragments > 3000 &
+    peak_region_fragments < 20000 &
+    pct_reads_in_peaks > 15 &
+    blacklist_ratio < 0.05 &
+    nucleosome_signal < 4 &
+    TSS.enrichment > 2
+)
+so
+```
+
+```{r normalisation_and_linear_dimensionality_reduction}
+so <- RunTFIDF(so)
+so <- FindTopFeatures(so)
+so <- RunSVD(so)
+```
+
+```{r}
+so_alt <- RunTFIDF(so_alt)
+so_alt <- FindTopFeatures(so_alt)
+so_alt <- RunSVD(so_alt)
+```
+# Often the first LSI component captures sequencing depth (techincal variation)
+# rather than biological variation
+# If this is the case then the component should be removed from downstream
+# analysis
+```{r sanity_check}
+DepthCor(so)
+```
+
+```{r non_linear_dimension_reduction_and_clustering}
+so <- RunUMAP(object = so, reduction = 'lsi', dims = 2:30)
+so <- FindNeighbors(object = so, reduction = 'lsi', dims = 2:30)
+so <- FindClusters(object=so, verbose = FALSE, resolution = 0.1)
+```
+
+```{r}
+so_alt <- RunUMAP(object = so_alt, reduction = 'lsi', dims = 2:30)
+so_alt <- FindNeighbors(object = so_alt, reduction = 'lsi', dims = 2:30)
+so_alt <- FindClusters(object=so_alt, verbose = FALSE, resolution = 0.1)
+```
+
+```{r plot_clusters}
+DimPlot(object=so, label=TRUE) + NoLegend()
+```
+
+```{r}
+DimPlot(object=so_alt, label=TRUE) + NoLegend()
+```
+
+# Attemt to quantify activity of each gene in the genome by assessing chromatin accessibility associated with each gene
+# Create a new gene activity assay derived from the scATAC-seq data
+
+# Extract gene coordinates
+# Extend them to incluse 2kb upstream region (promoter expression often correlated with gene expression)
+# Count number of fragments for each cell that map to each of these regions
+```{r gene_activity_matrix}
+gene.activities <- GeneActivity(so)
+so[['RNA']] <- CreateAssayObject(counts = gene.activities)
+so <- NormalizeData(
+  object = so,
+  assay = 'RNA',
+  normalization.method = 'LogNormalize',
+  scale.factor = median(so$nCount_RNA)
+)
+```
+
+```{r}
+gene.activities <- GeneActivity(so_alt)
+so_alt[['RNA']] <- CreateAssayObject(counts = gene.activities)
+so_alt <- NormalizeData(
+  object = so_alt,
+  assay = 'RNA',
+  normalization.method = 'LogNormalize',
+  scale.factor = median(so_alt$nCount_RNA)
+)
+```
+
+```{r}
+DefaultAssay(so) <- 'RNA'
+FeaturePlot(
+  object = so,
+  features = c('Adam17'),
+  pt.size = 0.1,
+  max.cutoff = 'q95',
+  ncol = 3
+)
+```
+
+```{r}
+DefaultAssay(so_alt) <- 'RNA'
+FeaturePlot(
+  object = so_alt,
+  features = c('Adam17'),
+  pt.size = 0.1,
+  max.cutoff = 'q95',
+  ncol = 3
+)
+```
+
+```{r}
+DefaultAssay(so) <- 'peaks'
+plt <- CoveragePlot(
+  object = so,
+  region = c("Klf2"),
+  extend.upstream = 1000,
+  extend.downstream = 1000,
+  ncol = 1)
+plt
+save_plot("atac_sell_d0.png", plt)
+```
+
+```{r}
+DefaultAssay(so_alt) <- 'peaks'
+plt <- CoveragePlot(
+  object = so_alt,
+  region = c("Klf2"),
+  extend.upstream = 1000,
+  extend.downstream = 1000,
+  ncol = 1)
+plt
+save_plot("atac_sell_d3.png", plt)
+```
