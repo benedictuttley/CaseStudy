@@ -12,81 +12,87 @@ setwd(paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubun",
              "dy/code"))
 
 # Load Dependencies
-packages <- c("tidyverse",  "Seurat", "cowplot", "biomaRt")
+packages <- c("tidyverse",  "Seurat", "cowplot", "biomaRt", "openxlsx")
 install.packages(packages)
 lapply(packages, library, character.only = TRUE)
 ```
 
 
 ```{r data_import}
-data_folder <- "../data/FastFile-xy87j6s3YHxvrHte/RNAseq/"
-div_0.data <-  Read10X(data.dir = paste0(data_folder, "X31-OVA-D0/filtered_featu",
-                                        "re_bc_matrix"))
-div_1.data <-  Read10X(data.dir = paste0(data_folder, "X31-OVA-D1/filtered_featu",
-                                         "re_bc_matrix"))
-div_2.data <-  Read10X(data.dir = paste0(data_folder, "X31-OVA-D2/filtered_featu",
-                                         "re_bc_matrix"))
-div_3.data <-  Read10X(data.dir = paste0(data_folder, "X31-OVA-D3/filtered_featu",
-                                        "re_bc_matrix"))
-# div_4.data <-  Read10X(data.dir = paste0(data_folder, "X31-OVA-D4/filtered_featu",
-#                                    "re_bc_matrix"))
-# N2.data <- Read10X(data.dir = paste0("../data/scRNAseq/N2/filtered_featu",
-#                                         "re_bc_matrix"))
-# B2.data <- Read10X(data.dir = paste0("../data/scRNAseq/B2/filtered_featu",
-#                                         "re_bc_matrix"))
-# E2.data <- Read10X(data.dir = paste0("../data/scRNAseq/E2/filtered_featu",
-#                                         "re_bc_matrix"))
-# M2.data <- Read10X(data.dir = paste0("../data/scRNAseq/M2/filtered_featu",
-#                                         "re_bc_matrix"))
-samples <- c(div_0.data,div_1.data,div_2.data,div_3.data)
+data_folder <- "../data/united/"
+
+# div_0.data <-  Read10X(data.dir = paste0(data_folder, 
+#                                          "X31-OVA-D0/filtered_feature_bc_matrix"))
+# div_1.data <-  Read10X(data.dir = paste0(data_folder, 
+#                                          "X31-OVA-D1/filtered_feature_bc_matrix"))
+# div_2.data <-  Read10X(data.dir = paste0(data_folder,
+#                                          "X31-OVA-D2/filtered_feature_bc_matrix"))
+# div_3.data <-  Read10X(data.dir = paste0(data_folder,
+#                                          "X31-OVA-D3/filtered_feature_bc_matrix"))
+# div_4.data <-  Read10X(data.dir = paste0(data_folder,
+#                                          "X31-OVA-D4/filtered_feature_bc_matrix"))
+
+
+N2.data <- Read10X(data.dir = paste0(data_folder,
+                                     "N2/filtered_feature_bc_matrix"))
+B2.data <- Read10X(data.dir = paste0(data_folder, 
+                                     "B2/filtered_feature_bc_matrix"))
+E2.data <- Read10X(data.dir = paste0(data_folder, 
+                                     "E2/filtered_feature_bc_matrix"))
+M2.data <- Read10X(data.dir = paste0(data_folder, 
+                                     "M2/filtered_feature_bc_matrix"))
+
+samples <- c(N2.data, B2.data, E2.data, M2.data)
+names <- c("N2", "B2", "E2", "M2")
 ```
-
-
 
 
 ```{r create_seurat_objects, echo=FALSE}
 sample_objs <- c()
-names <- c("Div0", "Div1", "Div2", "Div3")
 idx = 1
 for(sample in samples){
  sample <- CreateSeuratObject(counts = sample,
-                     project = "differential",
+                     project = "CaseStudy2021",
                      min.cells = 3,
                      min.features = 200)
- #print(names[idx])
  sample@meta.data$state <- names[idx]
  sample_objs <- append(sample_objs, sample)
  idx = idx + 1
 }
 ```
 
+```{r normalise}
+sample_objs <- lapply(X = sample_objs, FUN = function(x) {
+    x <- NormalizeData(x)
+})
+```
+
+```{r merge_objects, echo=FALSE}
+samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1],
+                         add.cell.ids =names, project = "CaseStudy2021")
+```
+
+
 ```{r}
-immune.combined <- merge(sample_objs[[1]],
-                         y = c(sample_objs[[2]],sample_objs[[3]], sample_objs[[4]]), add.cell.ids =c("Div0", "Div1", "Div2", "Div3"), project = "PBMC15K")
+Idents(object = samples.combined) <- samples.combined@meta.data$state
+samples.combined.markers <- Seurat::FindAllMarkers(object = samples.combined)
 ```
 
 ```{r}
-Idents(object = immune.combined) <- immune.combined@meta.data$state
-markers <- Seurat::FindAllMarkers(object = immune.combined)
-```
-```{R}
-View(markers)
+# TODO: Use this:
+
+# immune.combined.markers <- markers
+# immune.combined.markers %>% filter(avg_log2FC < Inf,
+#                                    avg_log2FC > -Inf,
+#                                    p_val_adj < 0.05,) %>%
+#   group_by(cluster) %>%
+#   arrange(desc(avg_log2FC))
 ```
 
-```{r}
-immune.combined.markers <- markers
-immune.combined.markers %>% filter(avg_log2FC < Inf,
-                                   avg_log2FC > -Inf,
-                                   p_val_adj < 0.05,) %>%
-  group_by(cluster) %>%
-  arrange(desc(avg_log2FC))
-```
 
-```{r}
-# Annotate genes from Ensembl
-ensembl <- useEnsembl(biomart = "ensembl",
-                      dataset = "mmusculus_gene_ensembl")
-genes <- unique(markers$gene)
+```{r annotation_biomart}
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+genes <- unique(samples.combined.markers$gene)
 genedesc <- getBM(attributes=c('external_gene_name',
                                'description',
                                'chromosome_name',
@@ -96,45 +102,25 @@ genedesc <- getBM(attributes=c('external_gene_name',
                   values = genes,
                   mart =ensembl)
 
-immune.combined.markers <- merge(immune.combined.markers,
-      genedesc,
-      all=TRUE,
-      by.x = c("gene"),
-      by.y = c("external_gene_name"))
+samples.combined.markers <- merge(samples.combined.markers, genedesc, all=TRUE,
+                                 by.x = c("gene"), by.y = c("external_gene_name"))
 
-immune.combined.markers <- immune.combined.markers[c("gene", "cluster", "avg_log2FC", "p_val_adj", "pct.1", "pct.2", "description", "chromosome_name", "start_position", "end_position")]
+# Reorder columns
+samples.combined.markers <- samples.combined.markers[c("gene", "cluster", "avg_log2FC", "p_val_adj", "pct.1", "pct.2", "description", "chromosome_name", "start_position", "end_position")]
 ```
 
-```{r}
-saveRDS(immune.combined.markers, file="Div_0-1-2-3_markers")
-```
-
-```{r}
-install.packages("openxlsx", dependencies = TRUE)
-library(openxlsx)
-```
 
 ```{r write_excel}
 genes_of_note <- c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1",
                    "Mzf1", "Irf1", "Ccr7", "S1pr1", "Cd44")
-# Create workbook (i.e. file) to put data in
-fileName <- "scRNA-seq.xlsx"
-excel <- createWorkbook(fileName)
 
-# Create sheet names for each wanted
-firstSheet <- "scRNA-seq"
+excel <- createWorkbook("scRNA-seq.xlsx")
+addWorksheet(excel, "scRNA-seq")
+writeData(excel, sheet = 1, samples.combined.markers)
 
-# Add worksheets to workbook
-addWorksheet(excel, firstSheet)
-
-# Add data to workbook
-writeData(excel, sheet = 1, immune.combined.markers)
-# for(gene in genes_of_note){
-#   conditionalFormatting(excel, 1, cols=7, rows = 1:end, type = "contains",
-#                         rule = "Sell", style = createStyle(bgFill = "yellow"))
-#   }
-immune.combined.markers$rownum <- 1:nrow(immune.combined.markers)
-rw <- immune.combined.markers %>% filter(gene %in% genes_of_note )
+# Highlight genes of particular interest
+samples.combined.markers$rownum <- 1:nrow(samples.combined.markers)
+rw <- samples.combined.markers %>% filter(gene %in% genes_of_note )
 highlight_style <- openxlsx::createStyle(fgFill = "yellow")
 openxlsx::addStyle(wb = excel, 
                    sheet = 1, 
@@ -144,22 +130,18 @@ openxlsx::addStyle(wb = excel,
                    stack = TRUE,
                    gridExpand = TRUE)
 
-# Finally write out to file
-saveWorkbook(excel, file = fileName, overwrite = TRUE)
-```
-
-
-```{r write_excel_specific}
+# Create second sheet containing only genes of note
 rw$rownum <- NULL
 rw <- rw %>% arrange(gene)
-secondSheet <- "scRNA-seq-specific"
-addWorksheet(excel, secondSheet)
+addWorksheet(excel, "scRNA-seq-specific")
 writeData(excel, sheet=2, rw)
-saveWorkbook(excel, file = fileName, overwrite = TRUE)
+
+# Finally write out to file
+saveWorkbook(excel, file = "../results/differential_analysis", overwrite = TRUE)
 ```
 
-```{r qc_func}
 
+```{r compute_qc_metrics, echo=FALSE}
 temp <- c()
 for(seurat_obj in sample_objs){
   mito.genes <- rownames(seurat_obj)[grep("^mt-",rownames(seurat_obj))]
@@ -168,25 +150,19 @@ for(seurat_obj in sample_objs){
   seurat_obj$percent.mito <- percent.mito
   temp <- append(temp, seurat_obj)
 }
-length(temp)
 sample_objs <- temp
 rm(temp)
 ```
 
-```{r}
-# Rare outlier of cells with an outlier level of high mitochondrial percentage and low UMI content,
-# we filter these as well
 
-plt <- FeatureScatter(object = sample_objs[[1]], feature1 = "nCount_RNA", feature2 = "percent.mito")
-plt 
+```{r results_setup, echo=FALSE}
+if(!dir.exists("../results")){dir.create("../results")}
+dir.create("../results/qc_metrics")
 ```
 
-```{r}
-# Filter out cells that have unque gene counts less than 200 or more than 2000
-FeatureScatter(object = sample_objs[[1]], feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
-```
 
-```{r}
+```{r plot_qc_metrics, echo=FALSE}
+library(patchwork)
 plots <- list()
 for (sample_obj in sample_objs){
   plt <- VlnPlot(object = sample_obj,
@@ -195,245 +171,44 @@ for (sample_obj in sample_objs){
                  combine = FALSE)
   plots <- append(plots, plt)
 }
-length(plots)
-plt <- wrap_plots(plots = plots)
-save_plot("as.png", plt, base_height = 10, base_width = 10)
+plt <- wrap_plots(plots = plots, nrow = length(sample_objs), ncol = 3)
+save_plot("../results/qc_metrics/qc_metrics.png", plt, base_height = 15, base_width = 20)
 plt
 ```
 
-```{r}
+
+```{r filter_on_qc_metrics, echo=FALSE}
 sample_objs <- lapply(X = sample_objs, FUN = function(x) {
   x <- subset(x = x,
               subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mito < 5 )
 })
-
 ```
 
-``` {r normalise, echo=FALSE}
-# Employ a global-scaling normalisation method 'LogNormalize' to normalize the
-# gene expression measurements for each cell by the total expression
-for(sample_obj in sample_objs){
-  sample_obj <- NormalizeData(sample_obj, 
-                          normalization.method = "LogNormalize",
-                          scale.factor = 10000)
-  }
-```
 
-``` {r combine, echo=FALSE}
-
-# Seurat calculates highly variable genes and focuses on these for downstream
-# analysis
-# FindVariableGenes calculates the average expression and dispersion for each gene
-# These genes are placed into binds
-# A z-score dispersion is computed within each bin
-sample_objs <- lapply(X = sample_objs, FUN = function(x) {
-  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
-})
-
-```
-
-```{r}
-# Scaling the data and removing unwanted sources of variation
-sample_objs <- lapply(X = sample_objs, FUN = function(x) {
-  x <- ScaleData(object = x, vars.to.regress = c("nCounts_RNA", "percent.mito"))
-})
-```
-
-```{r integrate, echo=FALSE}
-
-# Select features repeatedly variable across datasets for integration
-features <- SelectIntegrationFeatures(object.list = sample_objs)
-
-# Perform Integration
-immune.anchors <- FindIntegrationAnchors(object.list = sample_objs, 
-                                         anchor.features = features)
-immune.combined <- IntegrateData(anchorset = immune.anchors)
-```
-
-```{r}
-# Perform linear dimensionality reduction
-immune.combined <- FindVariableFeatures(immune.combined, selection.method = "vst", nfeatures = 2000)
-#immune.combined <- FindVariableFeatures(object = immune.combined, mean.function = ExpMean, dispersion.function = #LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5, nfeatures = 2000)
-immune.combined <- ScaleData(object = immune.combined, vars.to.regress = c("nCounts_RNA", "percent.mito"))
-#immune.combined <- RunPCA(immune.combined, npcs = 30, verbose = FALSE)
-#DimPlot(object=immune.combined, reduction = "pca", group.by = "state")
-```
-```{r}
-VariableFeaturePlot(object = immune.combined)
-```
-
-```{r}
-DimHeatmap(object = immune.combined, reduction = "pca", cells = 2000, balanced = TRUE,)
-```
-
-```{r}
-ElbowPlot(object = immune.combined)
-```
-
-```{r}
-immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 2:30)
-```
-
-```{r}
-DimPlot(immune.combined, reduction = "umap")
-```
-
-```{r}
-DefaultAssay(immune.combined ) <- "RNA"
-Idents(object = immune.combined) <- "state"
-immune.combined.markers <- FindMarkers(object = immune.combined, ident.1 = "N2", ident.2 = "E2")
-immune.combined.markers$gene <- rownames(immune.combined.markers)
-```
-```{r}
-View(immune.combined.markers)
-```
-
-``` {r visualise, echo=FALSE}
-#p1 <- DimPlot(immune.combined, reduction = "umap", group.by = "state")
-p2 <- DimPlot(immune.combined, reduction = "umap", label = TRUE)
-p2
-```
-
-```{r}
-plt <- DimPlot(immune.combined, reduction = "umap", split.by = "state")
-save_plot("composition.png", plt)
-```
-
-```{r}
-library(patchwork)
-#DefaultAssay(immune.combined) <- "integrated"
-plots <- VlnPlot(immune.combined, features = c("Sell"),
-    pt.size = 0, combine = FALSE)
+```{r violinplot, echo=FALSE}
+plots <- VlnPlot(samples.combined, features = c("Sell"), pt.size = 0, combine = FALSE)
 plt <- wrap_plots(plots = plots, nrow = 1)
+save_plot("../results/exp_violin.png", plt)
 plt
-save_plot("exp_violin.png", plt)
-```
-
-```{r Identify conserved cell type markers, echo=FALSE}
-DefaultAssay(immune.combined) <- "RNA"
-nk.markers <- FindConservedMarkers(immune.combined, ident.1 = 4,
-                                   grouping.var = "state", verbose = FALSE)
-```
-
-``` {r}
-# Canonical marker exploration
-DefaultAssay(immune.combined) <- "RNA"
-plt3 <- FeaturePlot(immune.combined, features = c("Sell"))
-save_plot("sell_and_adam.png", plt3)
-plt3
-```
-
-``` {r}
-# Canonical to both
-FeaturePlot(immune.combined, features = c("CD69", "CRTAM", "REL", "EGR2"), min.cutoff = "q4")
-```
-```{r}
-FeaturePlot(immune.combined, features = c("HIST1H1B", "HIST1H3C", "TOP2A", "PRC1"))
-
-```
-
-``` {r}
-  FeaturePlot(immune.combined, features = c("Sell"), split.by = "state", cols = c("grey", "red"))
-
-```
-``` {r}
-    FeaturePlot(immune.combined, features = c("DAPL1", "ADAM17"), split.by = "state", cols = c("grey", "red"))
-
-```
-
-```{r}
-plt <- VlnPlot(immune.combined, features = c("Sell"), split.by = "state",
-                 pt.size = 0.1, combine = FALSE, ncol = 13)
-plt
-save_plot("t.png", plt)
-```
-```{r}
-DefaultAssay(immune.combined) <- "RNA"
-nk.markers <- FindConservedMarkers(immune.combined, ident.1 = 0, grouping.var = "state", verbose = FALSE)
-head(nk.markers)
-#a <- immune.combined.markers %>% group_by(cluster) %>% top_n(15, avg_log2FC)
-#immune.combined.markers$genes <- rownames(immune.combined.markers)
-#View(a)
-```
-
-```{r}
-View(immune.combined.markers)
-```
-
-```{r}
-DefaultAssay(immune.combined) <- "RNA"
-DotPlot(immune.combined, features = c("Klf2", "Sell", "Ccr7", "S1pr1", "Cd44", "Cd8a", "Cd8b1", "Lef1", "Foxo1", "Sp1", "Ets1", "Mzf1", "Irf1"), cols = c("black", "red"), dot.scale = 12) + 
-    RotatedAxis()
-```
-
-```{r}
-
-# library(ggplot2)
-# library(cowplot)
-# theme_set(theme_cowplot())
-# 
-# t.cells <- subset(immune.combined, idents = "0")
-# Idents(t.cells) <- "state"
-# avg.t.cells <- as.data.frame(log1p(AverageExpression(t.cells, verbose = FALSE)$RNA))
-# avg.t.cells$gene <- rownames(avg.t.cells)
-# View(avg.t.cells)
-
-
-# Identify differential expressed genes across conditions
-immune.combined.markers <- FindAllMarkers(object = immune.combined)
-top_differentially_expressed_genes <- immune.combined.markers %>% group_by(cluster) %>% top_n(15, avg_log2FC)
-immune.combined.markers$genes <- rownames(immune.combined.markers)
-View(top_differentially_expressed_genes)
-
-```
-
-```{r}
-View(immune.combined.markers)
-```
-
-```{r}
-FeaturePlot(immune.combined, features = c("Sell"), split.by = "state", max.cutoff = 3, 
-    cols = c("grey", "red"))
-```
-
-```{r}
-
-#immune.combined$celltype.state <- paste(Idents(immune.combined), immune.combined$state, sep = "_")
-#immune.combined$celltype <- Idents(immune.combined)
-#Idents(immune.combined) <- "celltype.state"
-# b.interferon.response <- FindMarkers(immune.combined, ident.1 = "0_div0_div0_div0_div0_div0_div0", ident.2 = "0_div4_div4_div4_div4_div4_div4", verbose = FALSE)
-b.interferon.response$gene <- rownames(b.interferon.response)
-View(b.interferon.response)
-#head(b.interferon.response, n = 15)
-
-```
-```{r}
-head(Idents(immune.combined))
 ```
 
 
+```{r featureplot, echo=FALSE}
+plt <- FeaturePlot(samples.combined, features = c("Sell"), split.by = "state", 
+                   cols = c("grey", "red"))
+save_plot("../results/featureplot.png", plt)
+```
 
-```{r}
-#top2 <- immune.combined.markers %>% group_by(cluster) %>% top_n(2, avg_log2FC)
-# setting slim.col.label to TRUE will print just the cluster IDS instead of
-# every cell name
-immune.combined <- ScaleData(immune.combined, verbose = FALSE)
-# DoHeatmap(object = immune.combined, features = c("ADAM17", "SELL", "KLF2", "LEF1", "IL7R", "GZMB", "GZMK", "EOMES", "CCL5", "KLRG1", "NKG7", "ZEB2","IFNG", "CCL3", "CCL4", "TNFRSF9", "LIF", "IL2", "CD8A", "CD8B1"), label = TRUE,)
-# a <- DoHeatmap(immune.combined, features=c('CCL4', 'XCL1', 'NCL', 'HSPD1', 'HSP90AA1', 'KLF2', 'MALAT1', 'BTG1', 'IL7R', 'DAPL1', 'SELL', 'ADAM17')) + 
-a <- DoHeatmap(immune.combined, features=c('Sell', 'Klf2', 'Cd44' ))
-save_plot("heatmap.png", a)
+
+```{r heatmap, echo=FALSE}
+plt <- DoHeatmap(samples.combined, features=c('Sell'))
+save_plot("../results/heatmap.png", plt)
 a
 ```
 
+
 ```{r dotplot, echo=FALSE}
-markers.to.plot <- c("Cd8a", "Cd8b1", "Sell","Klf2", "Adam17")
-DotPlot(immune.combined, features = rev(markers.to.plot),
-        dot.scale = 8) + RotatedAxis()
-
-```
-
-```{r compare_states}
-res <- FindMarkers(immune.combined, ident.1 = c(0,6), ident.2 = c(1,2,3,4,5,7), verbose = FALSE)
-View(res)
-
+plt <- DotPlot(samples.combined, features = rev(c("Sell")), dot.scale = 8) + RotatedAxis()
+save_plot("../results/dotplot.png", plt)
+plt
 ```
