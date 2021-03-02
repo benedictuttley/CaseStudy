@@ -1,25 +1,69 @@
 ---
-title: "Differential scRNA-seq"
+title: "scRNA-seq Analysis"
 author: "Benedict"
-date: "18/02/2021"
-output: pdf_document
+date: "02/03/2021"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document: default
 ---
 
-```{r setup, include=FALSE}
+# Single Cell RNA-seq Analysis with Seurat
+This R Markdown document performs differential gene expression testing for a group of samples.
+
+## Project Structure
+```
+project
+│   README.md
+└───data
+│   │
+│   └───RNA
+│   │     N2
+│   │     B2
+│   │     E2
+│   │     M2
+│   └───ATAC
+│   │     X31-OVA_DIV0
+│   │     X31-OVA_DIV3
+└───code
+│     differential_scRNA-seq.Rmd
+│     differential_scATAC-seq.Rmd
+└───results
+│   │
+│   └───RNA
+│   │   scRNA-seq-DE.xlsx
+│   │   expression_heatmap.png
+│   │   expression_dotplot.png
+│   └───ATAC
+│   │     A
+│   │     B
+```
+
+## Dependencies
+* tidyverse
+* Seurat
+* cowplot
+* biomart
+* openxlsx
+* patchwork
+
+```{r setup, include=TRUE, echo=TRUE}
 knitr::opts_chunk$set(echo = TRUE)
 setwd(paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubun",
              "tuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStu",
              "dy/code"))
 
 # Load Dependencies
-packages <- c("tidyverse",  "Seurat", "cowplot", "biomaRt", "openxlsx")
-install.packages(packages)
+packages <- c("tidyverse",  "Seurat", "cowplot", "biomaRt", "openxlsx", "patchwork")
+#install.packages(packages)
 lapply(packages, library, character.only = TRUE)
 ```
 
-
-```{r data_import}
-data_folder <- "../data/united/"
+## Data Import
+Uncomment following code block to analyse the DIV0-4 samples
+```{r data_import_a,  include=TRUE, echo=TRUE, results='hide'}
+# data_folder <- "../data/united/RNA/"
 
 # div_0.data <-  Read10X(data.dir = paste0(data_folder, 
 #                                          "X31-OVA-D0/filtered_feature_bc_matrix"))
@@ -31,23 +75,27 @@ data_folder <- "../data/united/"
 #                                          "X31-OVA-D3/filtered_feature_bc_matrix"))
 # div_4.data <-  Read10X(data.dir = paste0(data_folder,
 #                                          "X31-OVA-D4/filtered_feature_bc_matrix"))
+# samples <- c(div_0.data, div_1.data, div_2.data, div_3.data, div_4.data)
+# names <- c("DIV0", "DIV1", "DIV2", "DIV3", "DIV4)
+```
 
-
+Uncomment following code block to analyse the N2, B2, E2, M2 samples
+```{r data_import_b, include=TRUE, echo=TRUE}
+data_folder <- "../data/united/RNA/"
 N2.data <- Read10X(data.dir = paste0(data_folder,
                                      "N2/filtered_feature_bc_matrix"))
-B2.data <- Read10X(data.dir = paste0(data_folder, 
+B2.data <- Read10X(data.dir = paste0(data_folder,
                                      "B2/filtered_feature_bc_matrix"))
-E2.data <- Read10X(data.dir = paste0(data_folder, 
+E2.data <- Read10X(data.dir = paste0(data_folder,
                                      "E2/filtered_feature_bc_matrix"))
-M2.data <- Read10X(data.dir = paste0(data_folder, 
+M2.data <- Read10X(data.dir = paste0(data_folder,
                                      "M2/filtered_feature_bc_matrix"))
-
 samples <- c(N2.data, B2.data, E2.data, M2.data)
 names <- c("N2", "B2", "E2", "M2")
 ```
 
-
-```{r create_seurat_objects, echo=FALSE}
+## Create Seurat objects from input data
+```{r create_seurat_objects, include=TRUE, echo=TRUE}
 sample_objs <- c()
 idx = 1
 for(sample in samples){
@@ -61,36 +109,67 @@ for(sample in samples){
 }
 ```
 
-```{r normalise}
+## Normalise Samples
+```{r normalise, include=TRUE, echo=TRUE}
 sample_objs <- lapply(X = sample_objs, FUN = function(x) {
     x <- NormalizeData(x)
 })
 ```
 
-```{r merge_objects, echo=FALSE}
+
+## Compute QC metrics
+```{r compute_qc_metrics, include=TRUE, echo=TRUE}
+temp <- c()
+for(seurat_obj in sample_objs){
+  mito.genes <- rownames(seurat_obj)[grep("^mt-",rownames(seurat_obj))]
+  c <- GetAssayData(object = seurat_obj, slot = "counts")
+  percent.mito <- colSums(c[mito.genes,])/Matrix::colSums(c)*100
+  seurat_obj$percent.mito <- percent.mito
+  temp <- append(temp, seurat_obj)
+}
+sample_objs <- temp
+rm(temp)
+```
+
+## Create QC plots
+```{r plot_qc_metrics, include=TRUE, echo=TRUE}
+plots <- list()
+for (sample_obj in sample_objs){
+  plt <- VlnPlot(object = sample_obj,
+                 features = c("nFeature_RNA", "nCount_RNA", "percent.mito"),
+                 ncol = 3,
+                 combine = FALSE)
+  plots <- append(plots, plt)
+}
+plt <- wrap_plots(plots = plots, nrow = length(sample_objs), ncol = 3)
+save_plot("../results/qc_metrics/qc_metrics.png", plt, base_height = 15, base_width = 20)
+plt
+```
+
+## Filter cells based on QC metrics
+```{r filter_on_qc_metrics, echo=FALSE}
+sample_objs <- lapply(X = sample_objs, FUN = function(x) {
+  x <- subset(x = x,
+              subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mito < 5 )
+})
+```
+
+## Merge Samples
+```{r merge_objects, include=TRUE, echo=TRUE}
 samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1],
                          add.cell.ids =names, project = "CaseStudy2021")
 ```
 
+## Perform Differential Expression (DE) Testing
 
-```{r}
+### [1] Compare expression betwen markers
+```{r differential_expression, include=TRUE, echo=TRUE, results='hide'}
 Idents(object = samples.combined) <- samples.combined@meta.data$state
 samples.combined.markers <- Seurat::FindAllMarkers(object = samples.combined)
 ```
 
-```{r}
-# TODO: Use this:
-
-# immune.combined.markers <- markers
-# immune.combined.markers %>% filter(avg_log2FC < Inf,
-#                                    avg_log2FC > -Inf,
-#                                    p_val_adj < 0.05,) %>%
-#   group_by(cluster) %>%
-#   arrange(desc(avg_log2FC))
-```
-
-
-```{r annotation_biomart}
+### [2] Annotate DE genes from ensembl
+```{r annotation_biomart, include=TRUE, echo=TRUE}
 ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
 genes <- unique(samples.combined.markers$gene)
 genedesc <- getBM(attributes=c('external_gene_name',
@@ -109,8 +188,8 @@ samples.combined.markers <- merge(samples.combined.markers, genedesc, all=TRUE,
 samples.combined.markers <- samples.combined.markers[c("gene", "cluster", "avg_log2FC", "p_val_adj", "pct.1", "pct.2", "description", "chromosome_name", "start_position", "end_position")]
 ```
 
-
-```{r write_excel}
+### [3] Write to excel spreadsheet 'scRNA-seq-DE'
+```{r write_excel, include=TRUE, echo=TRUE}
 genes_of_note <- c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1",
                    "Mzf1", "Irf1", "Ccr7", "S1pr1", "Cd44")
 
@@ -140,75 +219,25 @@ writeData(excel, sheet=2, rw)
 saveWorkbook(excel, file = "../results/differential_analysis", overwrite = TRUE)
 ```
 
-
-```{r compute_qc_metrics, echo=FALSE}
-temp <- c()
-for(seurat_obj in sample_objs){
-  mito.genes <- rownames(seurat_obj)[grep("^mt-",rownames(seurat_obj))]
-  c <- GetAssayData(object = seurat_obj, slot = "counts")
-  percent.mito <- colSums(c[mito.genes,])/Matrix::colSums(c)*100
-  seurat_obj$percent.mito <- percent.mito
-  temp <- append(temp, seurat_obj)
-}
-sample_objs <- temp
-rm(temp)
-```
-
-
-```{r results_setup, echo=FALSE}
-if(!dir.exists("../results")){dir.create("../results")}
-dir.create("../results/qc_metrics")
-```
-
-
-```{r plot_qc_metrics, echo=FALSE}
-library(patchwork)
-plots <- list()
-for (sample_obj in sample_objs){
-  plt <- VlnPlot(object = sample_obj,
-                 features = c("nFeature_RNA", "nCount_RNA", "percent.mito"),
-                 ncol = 3,
-                 combine = FALSE)
-  plots <- append(plots, plt)
-}
-plt <- wrap_plots(plots = plots, nrow = length(sample_objs), ncol = 3)
-save_plot("../results/qc_metrics/qc_metrics.png", plt, base_height = 15, base_width = 20)
-plt
-```
-
-
-```{r filter_on_qc_metrics, echo=FALSE}
-sample_objs <- lapply(X = sample_objs, FUN = function(x) {
-  x <- subset(x = x,
-              subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mito < 5 )
-})
-```
-
-
-```{r violinplot, echo=FALSE}
-plots <- VlnPlot(samples.combined, features = c("Sell"), pt.size = 0, combine = FALSE)
-plt <- wrap_plots(plots = plots, nrow = 1)
+## Expression Violin Plots
+```{r violinplot, include=TRUE, echo=TRUE}
+plots <- VlnPlot(samples.combined, features = c("Sell", "Adam17", "Klf2", "Ccr7"), pt.size = 0, combine = FALSE)
+plt <- wrap_plots(plots = plots, nrow = 2)
 save_plot("../results/exp_violin.png", plt)
 plt
 ```
 
-
-```{r featureplot, echo=FALSE}
-plt <- FeaturePlot(samples.combined, features = c("Sell"), split.by = "state", 
-                   cols = c("grey", "red"))
-save_plot("../results/featureplot.png", plt)
-```
-
-
-```{r heatmap, echo=FALSE}
-plt <- DoHeatmap(samples.combined, features=c('Sell'))
-save_plot("../results/heatmap.png", plt)
-a
-```
-
-
-```{r dotplot, echo=FALSE}
-plt <- DotPlot(samples.combined, features = rev(c("Sell")), dot.scale = 8) + RotatedAxis()
+## Expression Dot Plot
+```{r dotplot, include=TRUE, echo=TRUE}
+plt <- DotPlot(samples.combined, features = rev(genes_of_note), dot.scale = 8) + RotatedAxis()
 save_plot("../results/dotplot.png", plt)
+plt
+```
+
+## Expression Heatmap
+```{r heatmap, include=TRUE, echo=TRUE, results='hide'}
+samples.combined <- ScaleData(samples.combined)
+plt <- DoHeatmap(samples.combined, features=genes_of_note)
+save_plot("../results/heatmap.png", plt)
 plt
 ```

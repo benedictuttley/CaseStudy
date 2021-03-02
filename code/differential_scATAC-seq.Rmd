@@ -1,265 +1,217 @@
 ---
-title: "differential_scATAC-seq"
+title: "scATAC-seq Analysis"
 author: "Benedict"
-date: "22/02/2021"
-output: pdf_document
+date: "02/03/2021"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document: default
 ---
 
-```{r setup, include=FALSE}
+# Single Cell ATAC-seq Analysis with Signac
+This R Markdown document performs differential accessible chromatin testing for a group of samples
+
+## Project Structure
+```
+project
+│   README.md
+└───data
+│   │
+│   └───RNA
+│   │     N2
+│   │     B2
+│   │     E2
+│   │     M2
+│   └───ATAC
+│   │     X31-OVA_DIV0
+│   │     X31-OVA_DIV3
+└───code
+│     differential_scRNA-seq.Rmd
+│     differential_scATAC-seq.Rmd
+└───results
+│   │
+│   └───RNA
+│   │   scRNA-seq-DE.xlsx
+│   │   expression_heatmap.png
+│   │   expression_dotplot.png
+│   └───ATAC
+│   │     A
+│   │     B
+```
+
+## Dependencies
+* tidyverse
+* Seurat
+* Signac
+* cowplot
+* hdf5r
+* GenomeInfoDb
+* EnsDb.Mmusculus.v79
+* patchwork
+
+```{r setup, include=TRUE, echo=TRUE, results='hide'}
 setwd(paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubun",
              "tuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStu",
              "dy/code"))
 
 # Load Dependencies
-packages <- c("tidyverse",  "Seurat", "Signac", "cowplot")
-install.packages(packages)
+packages <- c("tidyverse",  "Seurat", "Signac", "cowplot", "patchwork")
+#install.packages(packages)
 lapply(packages, library, character.only = TRUE)
 BiocManager::install("hdf5r")
 library(hdf5r)
-```
-
-
-
-```{r data_import}
-counts <- Read10X_h5("../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div0/filtered_peak_bc_matrix.h5")
-
-counts_alt <- Read10X_h5("../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div3/filtered_peak_bc_matrix.h5")
-
-print(paste0("Number of cells in first: ", ncol(counts)))
-print(paste0("Number of cells in second: ", ncol(counts_alt)))
-```
-
-
-
-```{r metadata}
-metadata <- read.csv(
-  file = "../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div0/singlecell.csv",
-  header = TRUE,
-  row.names = 1)
-
-metadata_alt <- read.csv(
-  file = "../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div3/singlecell.csv",
-  header = TRUE,
-  row.names = 1)
-```
-
-```{r construct_seurat_object}
-assay <- CreateChromatinAssay(
-  counts = counts,
-  sep = c(":", "-"),
-  genome = "mm10",
-  fragments = '../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div0/fragments.tsv.gz',
-  min.cells = 1
-)
-
-so <- CreateSeuratObject(
-  counts = assay,
-  assay = 'peaks',
-  project = 'ATAC',
-  meta.data = metadata
-)
-```
-```{r construct_second_seurat_object}
-assay_alt <- CreateChromatinAssay(
-  counts = counts_alt,
-  sep = c(":", "-"),
-  genome = "mm10",
-  fragments = '../data/FastFile-ozSePqYiKKANUG8n/data2/scatacseq/X31-OVA_Div3/fragments.tsv.gz',
-  min.cells = 1
-)
-
-so_alt <- CreateSeuratObject(
-  counts = assay_alt,
-  assay = 'peaks',
-  project = 'ATAC',
-  meta.data = metadata_alt
-)
-```
-```{r merge}
-
-combined <- merge(
-  x = so,
-  y = so_alt,
-  add.cell.ids = c("so", "so_alt")
-)
-combined[["ATAC"]]
-```
-
-```{r add_annotations}
 library(GenomeInfoDb)
 library(EnsDb.Mmusculus.v79)
+```
+
+## Data Import
+```{r data_import, include=TRUE, echo=TRUE}
+data_folder <- "../data/united/ATAC/"
+sample_names <- c("X31-OVA_Div0", "X31-OVA_Div3")
+```
+
+## Create Seurat objects from input data
+```{r construct_objects, include=TRUE, echo=TRUE, results='hide'}
+sample_objs <- c()
+for(sample_name in sample_names){
+  
+  # Read in count data
+  counts <- Read10X_h5(paste0(data_folder, sample_name, "/filtered_peak_bc_matrix.h5"))
+  
+  # Read in metadata
+  metadata <- read.csv(
+  file = paste0(data_folder, sample_name, "/singlecell.csv"),
+  header = TRUE,
+  row.names = 1
+  )
+  
+  # Create assay
+  assay <- CreateChromatinAssay(
+    counts = counts,
+    sep = c(":", "-"),
+    genome = "mm10",
+    fragments = paste0(data_folder, sample_name, "/fragments.tsv.gz"),
+    min.cells = 1
+  )
+  
+  obj <- CreateSeuratObject(
+    counts = assay,
+    project = 'ATAC',
+    meta.data = metadata
+    )
+  
+  obj@meta.data$state <- sample_name
+  sample_objs <- append(sample_objs, obj)
+  }
+```
+
+```{r annotate, include=TRUE, echo=TRUE}
+
 # extract gene annotations from EnsDb
 annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
 
 # change to UCSC style since the data was mapped to hg19
 seqlevelsStyle(annotations) <- 'UCSC'
 genome(annotations) <- "mm10"
-
-# add the gene information to the object
-Annotation(so) <- annotations
 ```
 
-```{r}
-
-# change to UCSC style since the data was mapped to hg19
-seqlevelsStyle(annotations) <- 'UCSC'
-genome(annotations) <- "mm10"
-
-# add the gene information to the object
-Annotation(so_alt) <- annotations
+## Compute QC metrics for each sample
+```{r compute_qc_metrics, include=TRUE, echo=TRUE, results='hide'}
+temp <- c()
+for(seurat_obj in sample_objs){
+  Annotation(seurat_obj) <- annotations
+  seurat_obj <- NucleosomeSignal(object = seurat_obj)
+  seurat_obj <- TSSEnrichment(object = seurat_obj, fast = FALSE)
+  seurat_obj$pct_reads_in_peaks <- seurat_obj$peak_region_fragments / seurat_obj$passed_filters * 100
+  seurat_obj$blacklist_ratio <- seurat_obj$blacklist_region_fragments / seurat_obj$peak_region_fragments
+  temp <- append(temp, seurat_obj)
+}
+sample_objs <- temp
+rm(temp)
 ```
 
-``` {r QC_tss_score}
-so <- TSSEnrichment(object = so, fast = FALSE)
-so$high.tss <- ifelse(so$TSS.enrichment > 2, 'High', 'Low')
-TSSPlot(so, group.by = "high.tss")
-```
-```{r nucleosome_signal}
-so <- NucleosomeSignal(object = so)
+
+```{r results_setup, include=TRUE, echo=TRUE}
+if(!dir.exists("../results")){dir.create("../results")}
+dir.create("../results/qc_metrics")
 ```
 
-```{r QC_blacklist_ratio}
-so$blacklist_ratio <- so$blacklist_region_fragments / so$peak_region_fragments
-```
 
-```{r QC_pct_reads_in_peaks}
-so$pct_reads_in_peaks <- so$peak_region_fragments / so$passed_filters * 100
-```
-
-```{r qc_plot}
-atac_qc_plot <- VlnPlot(
-  object = so,
-  features = c('nucleosome_signal', 'blacklist_ratio', 'pct_reads_in_peaks',
-               'peak_region_fragments', 'TSS.enrichment'),
-  pt.size = 0.1,
-  ncol = 5
-)
-atac_qc_plot
-save_plot("atac_qc.png", atac_qc_plot)
-```
-
-```{r qc_apply_constraints}
-so <- subset(
-  x = so,
-  subset = peak_region_fragments > 3000 &
-    peak_region_fragments < 20000 &
-    pct_reads_in_peaks > 15 &
-    blacklist_ratio < 0.05 &
-    nucleosome_signal < 4 &
-    TSS.enrichment > 2
-)
-so
-```
-
-```{r normalisation_and_linear_dimensionality_reduction}
-so <- RunTFIDF(so)
-so <- FindTopFeatures(so)
-so <- RunSVD(so)
-```
-
-```{r}
-so_alt <- RunTFIDF(so_alt)
-so_alt <- FindTopFeatures(so_alt)
-so_alt <- RunSVD(so_alt)
-```
-# Often the first LSI component captures sequencing depth (techincal variation)
-# rather than biological variation
-# If this is the case then the component should be removed from downstream
-# analysis
-```{r sanity_check}
-DepthCor(so)
-```
-
-```{r non_linear_dimension_reduction_and_clustering}
-so <- RunUMAP(object = so, reduction = 'lsi', dims = 2:30)
-so <- FindNeighbors(object = so, reduction = 'lsi', dims = 2:30)
-so <- FindClusters(object=so, verbose = FALSE, resolution = 0.1)
-```
-
-```{r}
-so_alt <- RunUMAP(object = so_alt, reduction = 'lsi', dims = 2:30)
-so_alt <- FindNeighbors(object = so_alt, reduction = 'lsi', dims = 2:30)
-so_alt <- FindClusters(object=so_alt, verbose = FALSE, resolution = 0.1)
-```
-
-```{r plot_clusters}
-DimPlot(object=so, label=TRUE) + NoLegend()
-```
-
-```{r}
-DimPlot(object=so_alt, label=TRUE) + NoLegend()
-```
-
-# Attemt to quantify activity of each gene in the genome by assessing chromatin accessibility associated with each gene
-# Create a new gene activity assay derived from the scATAC-seq data
-
-# Extract gene coordinates
-# Extend them to incluse 2kb upstream region (promoter expression often correlated with gene expression)
-# Count number of fragments for each cell that map to each of these regions
-```{r gene_activity_matrix}
-gene.activities <- GeneActivity(so)
-so[['RNA']] <- CreateAssayObject(counts = gene.activities)
-so <- NormalizeData(
-  object = so,
-  assay = 'RNA',
-  normalization.method = 'LogNormalize',
-  scale.factor = median(so$nCount_RNA)
-)
-```
-
-```{r}
-gene.activities <- GeneActivity(so_alt)
-so_alt[['RNA']] <- CreateAssayObject(counts = gene.activities)
-so_alt <- NormalizeData(
-  object = so_alt,
-  assay = 'RNA',
-  normalization.method = 'LogNormalize',
-  scale.factor = median(so_alt$nCount_RNA)
-)
-```
-
-```{r}
-DefaultAssay(so) <- 'RNA'
-FeaturePlot(
-  object = so,
-  features = c('Adam17'),
-  pt.size = 0.1,
-  max.cutoff = 'q95',
-  ncol = 3
-)
-```
-
-```{r}
-DefaultAssay(so_alt) <- 'RNA'
-FeaturePlot(
-  object = so_alt,
-  features = c('Adam17'),
-  pt.size = 0.1,
-  max.cutoff = 'q95',
-  ncol = 3
-)
-```
-
-```{r}
-DefaultAssay(so) <- 'peaks'
-plt <- CoveragePlot(
-  object = so,
-  region = c("Klf2"),
-  extend.upstream = 1000,
-  extend.downstream = 1000,
-  ncol = 1)
+```{r plot_qc_metrics, include=TRUE, echo=TRUE}
+plots <- list()
+for (seurat_obj in sample_objs){
+  plt <- VlnPlot(object = seurat_obj,
+                 features = c('peak_region_fragments',
+                              'pct_reads_in_peaks',
+                              'blacklist_ratio',
+                              'nucleosome_signal',
+                              'TSS.enrichment'),
+                 pt.size = 0.1,
+                 ncol = 5,
+                 fill.by = 'feature',
+                 combine = FALSE)
+  
+  plots <- append(plots, plt)
+}
+plt <- wrap_plots(plots = plots, nrow = length(sample_objs), ncol = 5)
+save_plot("../results/qc_metrics/qc_metrics_atac.png", plt, base_height = 15, base_width = 20)
 plt
-save_plot("atac_sell_d0.png", plt)
 ```
 
-```{r}
-DefaultAssay(so_alt) <- 'peaks'
-plt <- CoveragePlot(
-  object = so_alt,
-  region = c("Klf2"),
-  extend.upstream = 1000,
-  extend.downstream = 1000,
-  ncol = 1)
-plt
-save_plot("atac_sell_d3.png", plt)
+
+## Merge Samples
+For efficiency, the merged object can be read in instead by uncommenting the second part of this
+code chunk. Remember to comment out the first part.
+```{r merge_samples, include=TRUE, echo=TRUE}
+# Option 1: Perform merge
+#samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1], 
+#                          add.cell.ids =names, project = "CaseStudy2021")
+
+# Option 2: Read in merged object
+samples.combined <- readRDS("DIV0AND3")
+Idents(samples.combined) <- "state"
+
+```
+
+
+## Identify differentially open chromatin regions
+For efficiency, the peaks object can be read in instead by uncommenting the second part of this
+code chunk. Remember to comment out the first part.
+```{r differential_open_chromatin, include=TRUE, echo=TRUE}
+# Option 1: Perform DE
+# samples.combined.peaks <- FindAllMarkers(
+#   object = samples.combined,
+#   min.pct = 0.2,
+#   test.use = 'LR',
+#   latent.vars = 'peak_region_fragments'
+# )
+# samples.combined.peaks$regions <- rownames(samples.combined.peaks)
+# saveRDS(samples.combined.peaks, "peaks_DIV0AND3")
+
+# Option 2: Read in peaks object
+samples.combined.peaks<- readRDS("peaks_DIV0AND3")
+closest_genes <- ClosestFeature(samples.combined,
+                                regions = rownames(samples.combined.peaks))
+```
+
+Edit and run the following chunk if you receive an error when running the
+CoveragePlot
+
+```{r coverage_plot, include=TRUE, echo=TRUE, results='hide'}
+new_paths <- c("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.UbuntuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStudy/data/united/ATAC/X31-OVA_Div0/fragments.tsv.gz",
+              "C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.UbuntuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStudy/data/united/ATAC/X31-OVA_Div3/fragments.tsv.gz")
+frags <- Fragments(samples.combined)
+for (i in 1:length(frags)) {
+  frags[[i]] <- UpdatePath(frags[[i]], new.path =  new_paths[[i]])
+}
+frags
+samples.combined <- SetAssayData(samples.combined, slot = "fragments", new.data =frags)
+```
+
+```{r coverage_plot, include=FALSE, echo=FALSE}
+CoveragePlot(
+  object = samples.combined,
+  region = "Sell"
+)
 ```
