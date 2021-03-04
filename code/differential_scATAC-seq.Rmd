@@ -3,10 +3,8 @@ title: "scATAC-seq Analysis"
 author: "Benedict"
 date: "02/03/2021"
 output:
-  html_document:
-    df_print: paged
-  word_document: default
-  pdf_document: default
+  pdf_document:
+    latex_engine: xelatex
 ---
 
 # Single Cell ATAC-seq Analysis with Signac
@@ -50,7 +48,7 @@ project
 * EnsDb.Mmusculus.v79
 * patchwork
 
-```{r setup, include=TRUE, echo=TRUE, results='hide'}
+```{r setup, include=FALSE, echo=TRUE, results='hide'}
 setwd(paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubun",
              "tuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStu",
              "dy/code"))
@@ -66,13 +64,19 @@ library(EnsDb.Mmusculus.v79)
 ```
 
 ## Data Import
-```{r data_import, include=TRUE, echo=TRUE}
+```{r data_import, include=FALSE, echo=TRUE}
 data_folder <- "../data/united/ATAC/"
 sample_names <- c("X31-OVA_Div0", "X31-OVA_Div3")
 ```
 
 ## Create Seurat objects from input data
-```{r construct_objects, include=TRUE, echo=TRUE, results='hide'}
+### Peak/Cell Matrix
+Each row is a region of the genome (peak) predicted to represent a region of
+open chromatin. Each value is the number of Tn5 integration sites for each 
+cell that map to the peak (row).
+### Fragment File
+List of all unique fragments across all single cells
+```{r construct_objects, include=FALSE, echo=TRUE, results='hide'}
 sample_objs <- c()
 for(sample_name in sample_names){
   
@@ -81,10 +85,10 @@ for(sample_name in sample_names){
   
   # Read in metadata
   metadata <- read.csv(
-  file = paste0(data_folder, sample_name, "/singlecell.csv"),
-  header = TRUE,
-  row.names = 1
-  )
+    file = paste0(data_folder, sample_name, "/singlecell.csv"),
+    header = TRUE,
+    row.names = 1
+    )
   
   # Create assay
   assay <- CreateChromatinAssay(
@@ -98,7 +102,8 @@ for(sample_name in sample_names){
   obj <- CreateSeuratObject(
     counts = assay,
     project = 'ATAC',
-    meta.data = metadata
+    meta.data = metadata,
+    assay = 'peaks'
     )
   
   obj@meta.data$state <- sample_name
@@ -106,7 +111,8 @@ for(sample_name in sample_names){
   }
 ```
 
-```{r annotate, include=TRUE, echo=TRUE}
+
+```{r annotate, include=FALSE, echo=TRUE}
 
 # extract gene annotations from EnsDb
 annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
@@ -117,7 +123,24 @@ genome(annotations) <- "mm10"
 ```
 
 ## Compute QC metrics for each sample
-```{r compute_qc_metrics, include=TRUE, echo=TRUE, results='hide'}
+Workflow computes and applied the following commonly used metrics in a QC step:
+
+* Nucleosome banding pattern: Historgram of DNA fragment sizes should correspond
+  to the length of DNA wrapped around a nucleosome
+* Transcriptional start site enrichment score: poor ATAC-seq experiments will
+  typically have a low TSS enrichment score
+* Total number of fragments in peaks
+  * A measure of cellular sequencing depth
+  * Cells with high levels may represent cell multiplets
+* Fraction of fragments in peaks
+  * Represents fraction of all fragments that fall within ATAC-seq peaks
+  * Cells with low values (<15-20%) often indicate the cell is of low-quality
+* Ratio of reads in genomic blacklist regions detailed by ENCODE
+  * These reads are often associated with artificial signal
+  * Cells with a high proportion of reads mapping to areas often
+    respresent techincal artifacts and should be removed
+
+```{r compute_qc_metrics, include=FALSE, echo=TRUE, results='hide'}
 temp <- c()
 for(seurat_obj in sample_objs){
   Annotation(seurat_obj) <- annotations
@@ -132,73 +155,166 @@ rm(temp)
 ```
 
 
-```{r results_setup, include=TRUE, echo=TRUE}
-if(!dir.exists("../results")){dir.create("../results")}
-dir.create("../results/qc_metrics")
+```{r plot_qc_metrics, include=TRUE}
+plots <- list()
+for (sample_obj in sample_objs){
+  plot(VlnPlot(object = sample_obj,
+               features = c('peak_region_fragments',
+                          'pct_reads_in_peaks',
+                          'blacklist_ratio',
+                          'nucleosome_signal',
+                          'TSS.enrichment'),
+               cols = c('light green'),
+               combine = TRUE) + 
+         plot_annotation(
+           title = paste0(sample_obj@meta.data$state[[1]], " QC Metrics")
+         )) 
+  }
 ```
 
-
-```{r plot_qc_metrics, include=TRUE, echo=TRUE}
-plots <- list()
-for (seurat_obj in sample_objs){
-  plt <- VlnPlot(object = seurat_obj,
-                 features = c('peak_region_fragments',
-                              'pct_reads_in_peaks',
-                              'blacklist_ratio',
-                              'nucleosome_signal',
-                              'TSS.enrichment'),
-                 pt.size = 0.1,
-                 ncol = 5,
-                 fill.by = 'feature',
-                 combine = FALSE)
-  
-  plots <- append(plots, plt)
-}
-plt <- wrap_plots(plots = plots, nrow = length(sample_objs), ncol = 5)
-save_plot("../results/qc_metrics/qc_metrics_atac.png", plt, base_height = 15, base_width = 20)
-plt
+```{r results_setup, include=FALSE, echo=TRUE}
+if(!dir.exists("../results")){dir.create("../results")}
+dir.create("../results/qc_metrics")
 ```
 
 
 ## Merge Samples
 For efficiency, the merged object can be read in instead by uncommenting the second part of this
 code chunk. Remember to comment out the first part.
-```{r merge_samples, include=TRUE, echo=TRUE}
+```{r merge_samples, include=FALSE, echo=TRUE}
 # Option 1: Perform merge
-#samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1], 
-#                          add.cell.ids =names, project = "CaseStudy2021")
+
+# Downsample
+sample_objs[[-1]] <- sample_objs[[-1]][,1:500]
+sample_objs[[1]] <-  sample_objs[[1]][,1:500]
+
+samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1], 
+                          add.cell.ids =c("DIV0", "DIV1"), project = "CaseStudy2021")
 
 # Option 2: Read in merged object
-samples.combined <- readRDS("DIV0AND3")
-Idents(samples.combined) <- "state"
+#samples.combined <- readRDS("DIV0AND3")
+#Idents(samples.combined) <- "state"
 
 ```
 
+```{r}
+Annotation(samples.combined) <- annotations
+```
+
+
+## Normalize Samples
+The data is normalized using term-frequency inverse document frequency
+```{r normalise, include=FALSE, echo=TRUE}
+samples.combined <- RunTFIDF(samples.combined)
+```
+
+## Linear Dimensionality Reduction
+```{r dim_red, include=FALSE, echo=TRUE, results='hide'}
+samples.combined <- FindTopFeatures(samples.combined, min.cutoff = 'q0')
+samples.combined <- RunSVD(samples.combined)
+samples.combined <- RunUMAP(object = samples.combined, reduction = 'lsi', dims = 2:30)
+```
+
+## UMAP Plot
+```{r}
+plt <- DimPlot(samples.combined, reduction = "umap", group.by = "state")
+plt
+#View(samples.combined)
+```
+
+## Gene Activity Matrix
+```{r construct_gene_activity_matrix, include=FALSE, echo=TRUE}
+gene.activities <- GeneActivity(samples.combined)
+# add the gene activity matrix to the Seurat object as a new assay and normalize it
+samples.combined[['RNA']] <- CreateAssayObject(counts = gene.activities)
+samples.combined <- NormalizeData(
+  object = samples.combined,
+  assay = 'RNA',
+  normalization.method = 'LogNormalize',
+  scale.factor = median(samples.combined$nCount_RNA)
+)
+```
+
+```{r}
+Assays(samples.combined)
+```
+
+```{r}
+DefaultAssay(samples.combined) <- 'RNA'
+
+FeaturePlot(
+  object = samples.combined,
+  features = c('Sell', 'Adam17', 'Klf2', 'Ccr7'),
+  pt.size = 0.1,
+)
+```
 
 ## Identify differentially open chromatin regions
 For efficiency, the peaks object can be read in instead by uncommenting the second part of this
 code chunk. Remember to comment out the first part.
-```{r differential_open_chromatin, include=TRUE, echo=TRUE}
+```{r differential_open_chromatin, include=FALSE, echo=TRUE}
+DefaultAssay(samples.combined) <- 'peaks'
 # Option 1: Perform DE
-# samples.combined.peaks <- FindAllMarkers(
-#   object = samples.combined,
-#   min.pct = 0.2,
-#   test.use = 'LR',
-#   latent.vars = 'peak_region_fragments'
-# )
-# samples.combined.peaks$regions <- rownames(samples.combined.peaks)
-# saveRDS(samples.combined.peaks, "peaks_DIV0AND3")
+samples.combined.peaks <- FindAllMarkers(
+  object = samples.combined,
+  min.pct = 0.01,
+  test.use = 'LR',
+  latent.vars = 'peak_region_fragments'
+)
+samples.combined.peaks$regions <- rownames(samples.combined.peaks)
+saveRDS(samples.combined.peaks, "peaks_DIV0AND3")
 
 # Option 2: Read in peaks object
-samples.combined.peaks<- readRDS("peaks_DIV0AND3")
+# samples.combined.peaks<- readRDS("peaks_DIV0AND3")
+```
+
+```{r}
 closest_genes <- ClosestFeature(samples.combined,
                                 regions = rownames(samples.combined.peaks))
 ```
 
+
+### Write to excel spreadsheet 'scATAC-seq-DE'
+Results of differential open chromatin regions test are written to an excel workbook with two sheets.
+Sheet one is all results with genes of particular importance being highlighted in yellow
+Sheet two contains only those genes of particular importance
+
+```{r write_excel, include=FALSE, echo=TRUE}
+de_atac_results <- merge(samples.combined.peaks, closest_genes, by.x='regions', by.y='query_region')
+
+excel <- createWorkbook("scATAC-seq-DE")
+addWorksheet(excel, "scATAC-seq")
+writeData(excel, sheet = 1, de_atac_results)
+
+# Highlight genes of particular interest
+genes_of_note <- c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1",
+                   "Mzf1", "Irf1", "Ccr7", "S1pr1", "Cd44")
+de_atac_results$rownum <- 1:nrow(de_atac_results)
+rw <- de_atac_results %>% dplyr::filter(gene_name %in% genes_of_note )
+highlight_style <- openxlsx::createStyle(fgFill = "yellow")
+openxlsx::addStyle(wb = excel, 
+                   sheet = 1, 
+                   style = highlight_style,
+                   rows = (rw$rownum+1),
+                   cols = 1:ncol(rw),
+                   stack = TRUE,
+                   gridExpand = TRUE)
+
+# Create second sheet containing only genes of note
+rw$rownum <- NULL
+rw <- rw %>% arrange(gene)
+addWorksheet(excel, "scATAC-seq-specific")
+writeData(excel, sheet=2, rw)
+
+# Finally write out to file
+saveWorkbook(excel, file = "../results/ATAC/scATAC-seq-DE.xlsx", overwrite = TRUE)
+```
+
+
 Edit and run the following chunk if you receive an error when running the
 CoveragePlot
 
-```{r coverage_plot, include=TRUE, echo=TRUE, results='hide'}
+```{r include=FALSE, echo=TRUE, results='hide'}
 new_paths <- c("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.UbuntuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStudy/data/united/ATAC/X31-OVA_Div0/fragments.tsv.gz",
               "C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.UbuntuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStudy/data/united/ATAC/X31-OVA_Div3/fragments.tsv.gz")
 frags <- Fragments(samples.combined)
@@ -209,9 +325,48 @@ frags
 samples.combined <- SetAssayData(samples.combined, slot = "fragments", new.data =frags)
 ```
 
-```{r coverage_plot, include=FALSE, echo=FALSE}
+## Accessibility Violin Plots
+### Sell
+```{r violinplot_sell, include=TRUE, echo=TRUE}
+Idents(samples.combined) <- "state"
+VlnPlot(samples.combined, features = c("Adam17"))
+```
+
+### Adam17
+```{r violinplot_sell, include=TRUE, echo=TRUE}
+Idents(samples.combined) <- "state"
+VlnPlot(samples.combined, features = c("Adam17"))
+```
+
+### Klf2
+```{r violinplot_sell, include=TRUE, echo=TRUE}
+Idents(samples.combined) <- "state"
+VlnPlot(samples.combined, features = c("Sell"))
+```
+
+## Coverage Plots
+
+### Sell
+```{r coverage_plot, include=TRUE, echo=FALSE}
+DefaultAssay(samples.combined) <- 'peaks'
 CoveragePlot(
   object = samples.combined,
   region = "Sell"
+)
+```
+
+### Adam17
+```{r coverage_plot, include=TRUE, echo=FALSE}
+CoveragePlot(
+  object = samples.combined,
+  region = "Adam17"
+)
+```
+
+### Klf2
+```{r coverage_plot, include=TRUE, echo=FALSE}
+CoveragePlot(
+  object = samples.combined,
+  region = "Klf2"
 )
 ```
