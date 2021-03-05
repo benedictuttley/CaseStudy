@@ -8,7 +8,14 @@ output:
 ---
 
 # Single Cell RNA-seq Analysis with Seurat
-This R Markdown document performs differential gene expression testing for a group of samples.
+This R Markdown document performs differential gene expression testing for a group of samples and consists of six stages:
+
+1. Data Import
+2. Quality Control
+3. Dimensionality Reduction
+4. Miscellaneous plots
+5. Differential Expression (DE) analysis
+6. Gene Enrichment Analysis
 
 ## Project Structure
 ```
@@ -29,12 +36,11 @@ project
 │     differential_scATAC-seq.Rmd
 └───results
 │   └───RNA
-│   │   scRNA-seq-DE.xlsx
-│   │   expression_heatmap.png
-│   │   expression_dotplot.png
+│   │     scRNA-seq-DE.xlsx
+│   │     expression_heatmap.png
+│   │     expression_dotplot.png
 │   └───ATAC
-│   │     A
-│   │     B
+│         scATAC-seq-DE.xlsx
 ```
 
 ## Dependencies
@@ -44,6 +50,7 @@ project
 * biomart
 * openxlsx
 * patchwork
+* enrichR
 
 ```{r setup, include=FALSE, echo=TRUE, results='hide'}
 knitr::opts_chunk$set(echo = TRUE)
@@ -52,7 +59,8 @@ setwd(paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubun",
              "dy/code"))
 
 # Load Dependencies
-packages <- c("tidyverse",  "Seurat", "cowplot", "biomaRt", "openxlsx", "patchwork")
+packages <- c("tidyverse",  "Seurat", "cowplot", "biomaRt", "openxlsx",
+              "patchwork", "enrichR")
 #install.packages(packages)
 lapply(packages, library, character.only = TRUE)
 ```
@@ -61,10 +69,10 @@ lapply(packages, library, character.only = TRUE)
 Uncomment following code block to analyse the DIV0-4 samples
 ```{r data_import_a,  include=TRUE, echo=TRUE, results='hide'}
 # data_folder <- "../data/united/RNA/"
-
-# div_0.data <-  Read10X(data.dir = paste0(data_folder, 
+# 
+# div_0.data <-  Read10X(data.dir = paste0(data_folder,
 #                                          "X31-OVA-D0/filtered_feature_bc_matrix"))
-# div_1.data <-  Read10X(data.dir = paste0(data_folder, 
+# div_1.data <-  Read10X(data.dir = paste0(data_folder,
 #                                          "X31-OVA-D1/filtered_feature_bc_matrix"))
 # div_2.data <-  Read10X(data.dir = paste0(data_folder,
 #                                          "X31-OVA-D2/filtered_feature_bc_matrix"))
@@ -73,7 +81,7 @@ Uncomment following code block to analyse the DIV0-4 samples
 # div_4.data <-  Read10X(data.dir = paste0(data_folder,
 #                                          "X31-OVA-D4/filtered_feature_bc_matrix"))
 # samples <- c(div_0.data, div_1.data, div_2.data, div_3.data, div_4.data)
-# names <- c("DIV0", "DIV1", "DIV2", "DIV3", "DIV4)
+# names <- c("DIV0", "DIV1", "DIV2", "DIV3", "DIV4")
 ```
 
 Uncomment following code block to analyse the N2, B2, E2, M2 samples
@@ -122,10 +130,14 @@ Workflow computes and applied the following commonly used metrics in a QC step:
 ```{r compute_qc_metrics, include=TRUE, echo=TRUE, results='hide'}
 temp <- c()
 for(seurat_obj in sample_objs){
-  mito.genes <- rownames(seurat_obj)[grep("^mt-",rownames(seurat_obj))]
-  c <- GetAssayData(object = seurat_obj, slot = "counts")
-  percent.mito <- colSums(c[mito.genes,])/Matrix::colSums(c)*100
-  seurat_obj$percent.mito <- percent.mito
+  total_counts_per_cell <- colSums(seurat_obj@assays$RNA@counts)
+  
+  mito.genes <- rownames(seurat_obj)[grep("^mt-", rownames(seurat_obj))]
+  seurat_obj$percent.mito <- colSums(seurat_obj@assays$RNA@counts[mito.genes, ])/total_counts_per_cell
+  
+  ribo.genes <- rownames(seurat_obj)[grep("^Rp[sl]", rownames(seurat_obj))]
+  seurat_obj$percent.ribo <- colSums(seurat_obj@assays$RNA@counts[ribo.genes, ])/total_counts_per_cell
+  
   temp <- append(temp, seurat_obj)
 }
 sample_objs <- temp
@@ -137,7 +149,7 @@ rm(temp)
 plots <- list()
 for (sample_obj in sample_objs){
   plot(VlnPlot(object = sample_obj,
-             features = c("nFeature_RNA", "nCount_RNA", "percent.mito"),
+             features = c("percent.ribo", "percent.mito"),
              cols = c('light green'),
              combine = TRUE) + 
          plot_annotation(
@@ -145,20 +157,54 @@ for (sample_obj in sample_objs){
          )) 
   }
 ```
+```{r}
 
+# Compute the relative expression of each gene per cell Use sparse matrix
+# operations, if your dataset is large, doing matrix devisions the regular way
+# will take a very long time.
+# for (sample_obj in sample_objs){
+# data.filt <- sample_obj
+# par(mar = c(4, 8, 2, 1))
+# C <- data.filt@assays$RNA@counts
+# C <- Matrix::t(Matrix::t(C)/Matrix::colSums(C)) * 100
+# most_expressed <- order(apply(C, 1, median), decreasing = T)[20:1]
+# boxplot(as.matrix(t(C[most_expressed, ])), cex = 0.1, las = 1, xlab = "% total count per cell", 
+#     col = (scales::hue_pal())(20)[20:1], horizontal = TRUE)
+# }
+```
+## Filter Genes
+Mitochondrial and ribosomal genes are removed
+Comment out this code block to keep them
+```{r filter_genes, include=FALSE, echo=TRUE}
+temp <- c()
+for (sample_obj in sample_objs){
+# Filter MALAT1
+sample_obj <- sample_obj[!grepl("Malat1", rownames(sample_obj)), ]
+
+# Filter Mitocondrial
+sample_obj <- sample_obj[!grepl("^mt-", rownames(sample_obj)), ]
+
+# Filter Ribossomal gene (optional if that is a problem on your data) data.filt
+sample_obj<- sample_obj[ ! grepl('^Rp[sl]', rownames(sample_obj)), ]
+temp <- append(temp, sample_obj)
+}
+
+sample_objs <- temp
+rm(temp)
+```
 
 ## Filter cells based on QC metrics
 ```{r filter_on_qc_metrics, echo=FALSE}
 sample_objs <- lapply(X = sample_objs, FUN = function(x) {
   x <- subset(x = x,
-              subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mito < 5 )
+              subset = nFeature_RNA > 200 & nFeature_RNA < 8000 & percent.mito < 10 )
 })
 ```
 
 ## Normalize Samples
 The data is normalized using a global-scaling normalization method to normalise gene expression levels for each cell by the total expression.
 This is multipliplied the a scale factor of 1000 and the result is natural-log-transformed.
-```{r normalise, include=TRUE, echo=TRUE}
+```{r normalise, include=FALSE, echo=TRUE}
 sample_objs <- lapply(X = sample_objs, FUN = function(x) {
     x <- NormalizeData(x, normalization.method="LogNormalize", scale.factor=1000)
     x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
@@ -188,30 +234,34 @@ samples.combined <- ScaleData(samples.combined, features = all.genes)
 ## Linear Dimensionality Reduction
 ```{r dim_red, include=FALSE, echo=TRUE, results='hide'}
 samples.combined <- RunPCA(samples.combined, npcs = 30, verbose = FALSE)
-samples.combined <- RunUMAP(samples.combined, reduction = "pca", dims = 1:30)
+samples.combined <- RunUMAP(samples.combined, reduction = "pca", dims = 2:30)
 ```
 
 ## UMAP Plot
 ```{r}
 plt <- DimPlot(samples.combined, reduction = "umap", group.by = "state")
+save_plot("../results/RNA/plots/umap.png", plt)
 plt
 ```
 \newpage
 
 ```{r}
-plt <- FeaturePlot(samples.combined, features = c("Sell"))
+plt <- DimPlot(samples.combined, reduction = "umap", group.by = "state")
+save_plot("../results/RNA/plots/umap_sell.png", plt)
 plt
 ```
 \newpage
 
 ```{r}
 plt <- FeaturePlot(samples.combined, features = c("Adam17"))
+save_plot("../results/RNA/plots/umap_adam17.png", plt)
 plt
 ```
 \newpage
 
 ```{r}
 plt <- FeaturePlot(samples.combined, features = c("Klf2"))
+save_plot("../results/RNA/plots/umap_klf2.png", plt)
 plt
 ```
 
@@ -219,19 +269,25 @@ plt
 ### Sell
 ```{r violinplot_sell, include=TRUE, echo=TRUE}
 Idents(samples.combined) <- "state"
-VlnPlot(samples.combined, features = c("Sell"))
+plt <- VlnPlot(samples.combined, features = c("Sell"))
+save_plot("../results/RNA/plots/sell_violin.png", plt)
+plt
 ```
 
 ### Adam17
 
 ```{r violinplot_adam17, include=TRUE, echo=TRUE}
-VlnPlot(samples.combined, features = c("Adam17"))
+plt <- VlnPlot(samples.combined, features = c("Adam17"))
+save_plot("../results/RNA/plots/adam17_violin.png", plt)
+plt
 ```
 
 ### Klf2
 
 ```{r violinplot_klf2, include=TRUE, echo=TRUE}
-VlnPlot(samples.combined, features = c("Klf2"))
+plt <- VlnPlot(samples.combined, features = c("Klf2"))
+save_plot("../results/RNA/plots/adam17_violin.png", plt)
+plt
 ```
 \newpage
 
@@ -241,7 +297,7 @@ genes_of_note <- c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1",
                    "Mzf1", "Irf1", "Ccr7", "S1pr1", "Cd44")
 plt <- DotPlot(samples.combined, features = rev(genes_of_note), dot.scale = 8) +
   RotatedAxis()
-save_plot("../results/RNA/expression_dotplot.png", plt)
+save_plot("../results/RNA/plots/expression_dotplot.png", plt)
 plt
 ```
 
@@ -251,7 +307,7 @@ plt
 ```{r heatmap, include=TRUE, echo=TRUE}
 samples.combined <- ScaleData(samples.combined)
 plt <- DoHeatmap(samples.combined, features=genes_of_note)
-save_plot("../results/RNA/expression_heatmap.png", plt)
+save_plot("../results/RNA/plots/expression_heatmap.png", plt)
 plt
 ```
 
@@ -264,11 +320,12 @@ Performs a Wilcoxon Rank Sum test to identify differentially expressed genes bet
 
 ```{r differential_expression, include=FALSE, echo=TRUE, results='hide'}
 Idents(object = samples.combined) <- samples.combined@meta.data$state
-samples.combined.markers <- Seurat::FindAllMarkers(object = samples.combined)
+samples.combined.markers <- Seurat::FindAllMarkers(object = samples.combined, 
+                                                   logfc.threshold = 0.01)
 ```
 
 ### Annotate DE genes from ensembl
-```{r annotation_biomart, include=TRUE, echo=TRUE}
+```{r annotation_biomart, include=FALSE, echo=TRUE}
 ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
 genes <- unique(samples.combined.markers$gene)
 genedesc <- getBM(attributes=c('external_gene_name',
@@ -301,7 +358,7 @@ writeData(excel, sheet = 1, samples.combined.markers)
 
 # Highlight genes of particular interest
 samples.combined.markers$rownum <- 1:nrow(samples.combined.markers)
-rw <- samples.combined.markers %>% filter(gene %in% genes_of_note )
+rw <- samples.combined.markers %>% dplyr::filter(gene %in% genes_of_note )
 highlight_style <- openxlsx::createStyle(fgFill = "yellow")
 openxlsx::addStyle(wb = excel, 
                    sheet = 1, 
@@ -321,3 +378,13 @@ writeData(excel, sheet=2, rw)
 saveWorkbook(excel, file = "../results/RNA/scRNA-seq-DE.xlsx", overwrite = TRUE)
 ```
 
+
+## Gene Enrichment Analysis
+Find and plot top enriched and top depleted GO terms from EnrichR
+```{r gene_ontology_enrichment_analysis, include=TRUE, echo=FALSE}
+plt <- DEenrichRPlot(samples.combined, enrich.database = "KEGG_2019_Mouse",
+                     max.genes = 300, ident.1 = "N2",
+                     ident.2 = "B2", balanced=TRUE, num.pathway = 15)
+save_plot("../results/RNA/plots/enrichment_analysis.png", plt)
+plt
+```
