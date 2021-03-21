@@ -36,11 +36,15 @@ project
 │     differential_scATAC-seq.Rmd
 └───results
 │   └───RNA
-│   │     scRNA-seq-DE.xlsx
-│   │     expression_heatmap.png
-│   │     expression_dotplot.png
+│   │   │ scRNA-seq-DE.xlsx
+│   │   └───QC
+│   │   │ 
+│   │   └───plots
 │   └───ATAC
-│         scATAC-seq-DE.xlsx
+│   │   │  scATAC-seq-DE.xlsx
+│   │   └───QC
+│   │   │ 
+│   │   └───plots
 ```
 
 ## Dependencies
@@ -84,6 +88,7 @@ Uncomment following code block to analyse the DIV0-4 samples
 # names <- c("DIV0", "DIV1", "DIV2", "DIV3", "DIV4")
 ```
 
+
 Uncomment following code block to analyse the N2, B2, E2, M2 samples
 ```{r data_import_b, include=TRUE, echo=TRUE}
 data_folder <- "../data/united/RNA/"
@@ -95,8 +100,16 @@ E2.data <- Read10X(data.dir = paste0(data_folder,
                                      "E2/filtered_feature_bc_matrix"))
 M2.data <- Read10X(data.dir = paste0(data_folder,
                                      "M2/filtered_feature_bc_matrix"))
-samples <- c(N2.data, B2.data, E2.data, M2.data)
-names <- c("N2", "B2", "E2", "M2")
+samples <- c(N2.data, E2.data, B2.data, M2.data)
+names <- c("N2","E2", "B2", "M2")
+```
+
+Number of cells per sample pre-QC
+```{r pre_qc_cell_counts}
+for(i in seq_along(samples)){
+  num_cells <- ncol(samples[[i]])
+  print(paste0(names[[i]],": ", num_cells))
+}
 ```
 
 ## Create Seurat objects from input data
@@ -105,7 +118,7 @@ sample_objs <- c()
 idx = 1
 for(sample in samples){
  sample <- CreateSeuratObject(counts = sample,
-                     project = "CaseStudy2021",
+                     project = "scRNA-seq",
                      min.cells = 3,
                      min.features = 200)
  sample@meta.data$state <- names[idx]
@@ -133,10 +146,10 @@ for(seurat_obj in sample_objs){
   total_counts_per_cell <- colSums(seurat_obj@assays$RNA@counts)
   
   mito.genes <- rownames(seurat_obj)[grep("^mt-", rownames(seurat_obj))]
-  seurat_obj$percent.mito <- colSums(seurat_obj@assays$RNA@counts[mito.genes, ])/total_counts_per_cell
+  seurat_obj$percent.mito <- (colSums(seurat_obj@assays$RNA@counts[mito.genes, ])/total_counts_per_cell)*100
   
   ribo.genes <- rownames(seurat_obj)[grep("^Rp[sl]", rownames(seurat_obj))]
-  seurat_obj$percent.ribo <- colSums(seurat_obj@assays$RNA@counts[ribo.genes, ])/total_counts_per_cell
+  seurat_obj$percent.ribo <- (colSums(seurat_obj@assays$RNA@counts[ribo.genes, ])/total_counts_per_cell)*100
   
   temp <- append(temp, seurat_obj)
 }
@@ -146,32 +159,26 @@ rm(temp)
 
 
 ```{r plot_qc_metrics, include=TRUE}
-plots <- list()
-for (sample_obj in sample_objs){
-  plot(VlnPlot(object = sample_obj,
-             features = c("percent.ribo", "percent.mito"),
-             cols = c('light green'),
-             combine = TRUE) + 
-         plot_annotation(
-           title = paste0(sample_obj@meta.data$state[[1]], " QC Metrics")
-         )) 
-  }
-```
-```{r}
+# Temp merge for plot purposes only
+samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1],
+                         add.cell.ids =names, project = "scRNA-seq")
 
-# Compute the relative expression of each gene per cell Use sparse matrix
-# operations, if your dataset is large, doing matrix devisions the regular way
-# will take a very long time.
-# for (sample_obj in sample_objs){
-# data.filt <- sample_obj
-# par(mar = c(4, 8, 2, 1))
-# C <- data.filt@assays$RNA@counts
-# C <- Matrix::t(Matrix::t(C)/Matrix::colSums(C)) * 100
-# most_expressed <- order(apply(C, 1, median), decreasing = T)[20:1]
-# boxplot(as.matrix(t(C[most_expressed, ])), cex = 0.1, las = 1, xlab = "% total count per cell", 
-#     col = (scales::hue_pal())(20)[20:1], horizontal = TRUE)
-# }
+plt_pct_mito <- VlnPlot(object = samples.combined,
+                        features = c("percent.mito"),
+                        group.by = "state") + labs(title = "% Mitochondrial Reads")
+save_plot(paste0("../results/RNA/QC/", "pct_mito", ".png"), plt_pct_mito)
+
+
+plt_num_features <- VlnPlot(object = samples.combined,
+                            features = c("nFeature_RNA"),
+                            group.by = "state") + labs(title = "Number of Unique Genes")
+save_plot(paste0("../results/RNA/QC/", "num_unique_genes", ".png"), plt_num_features)
+
+# Render
+plt_pct_mito
+plt_num_features
 ```
+
 ## Filter Genes
 Mitochondrial and ribosomal genes are removed
 Comment out this code block to keep them
@@ -197,13 +204,21 @@ rm(temp)
 ```{r filter_on_qc_metrics, echo=FALSE}
 sample_objs <- lapply(X = sample_objs, FUN = function(x) {
   x <- subset(x = x,
-              subset = nFeature_RNA > 200 & nFeature_RNA < 8000 & percent.mito < 10 )
+              subset = nFeature_RNA > 250 & nFeature_RNA < 2500 & percent.mito < 4 )
 })
 ```
 
-## Normalize Samples
+Number of cells per sample post-QC
+```{r post_qc_cell_counts}
+for(i in seq_along(sample_objs)){
+  num_cells <- ncol(sample_objs[[i]])
+  print(paste0(names[[i]],": ", num_cells))
+}
+```
+
+## Normalize Samples independently
 The data is normalized using a global-scaling normalization method to normalise gene expression levels for each cell by the total expression.
-This is multipliplied the a scale factor of 1000 and the result is natural-log-transformed.
+This is multiplied the a scale factor of 1000 and the result is natural-log-transformed.
 ```{r normalise, include=FALSE, echo=TRUE}
 sample_objs <- lapply(X = sample_objs, FUN = function(x) {
     x <- NormalizeData(x, normalization.method="LogNormalize", scale.factor=1000)
@@ -211,93 +226,64 @@ sample_objs <- lapply(X = sample_objs, FUN = function(x) {
 })
 ```
 
-## Merge Samples
+## Option 1: Merge Samples
 ```{r merge_objects, include=TRUE, echo=TRUE}
 samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1],
-                         add.cell.ids =names, project = "CaseStudy2021")
+                         add.cell.ids =names, project = "scRNA-seq")
+samples.combined <- FindVariableFeatures(samples.combined,
+                                         selection.method = "vst",
+                                         nfeatures = 2000)
 ```
 
-## Scale Data
-Pre-processing step before dimensional reduction is performed
+## Option 2: Integrate Samples
+```{r integrate_objects, include=TRUE, echo=TRUE}
+#features <- SelectIntegrationFeatures(object.list = sample_objs)
+#anchors <- FindIntegrationAnchors(object.list = sample_objs, anchor.features = features)
+samples.combined <- IntegrateData(anchorset = anchors)
+DefaultAssay(samples.combined) <- "integrated"
+```
 
+## Perform Single Integrated Analysis
+Pre-processing step before dimensional reduction is performed
 * Expression of each gene shifted to give mean expression of 0 across cells
 * Expression of each gene scaled to give a variance of 1 across cells
   * Prevents domination from highly-expressed genes
 ```{r include=TRUE, include=FALSE, echo=TRUE, results='hide'}
-samples.combined <- FindVariableFeatures(samples.combined,
-                                         selection.method = "vst",
-                                         nfeatures = 2000)
-all.genes <- rownames(samples.combined)
-samples.combined <- ScaleData(samples.combined, features = all.genes)
+samples.combined <- ScaleData(samples.combined, verbose = FALSE)
+samples.combined <- RunPCA(samples.combined, npcs = 50, verbose = FALSE)
 ```
-
-## Linear Dimensionality Reduction
-```{r dim_red, include=FALSE, echo=TRUE, results='hide'}
-samples.combined <- RunPCA(samples.combined, npcs = 30, verbose = FALSE)
-samples.combined <- RunUMAP(samples.combined, reduction = "pca", dims = 2:30)
-```
-
-## UMAP Plot
 ```{r}
-plt <- DimPlot(samples.combined, reduction = "umap", group.by = "state")
-save_plot("../results/RNA/plots/umap.png", plt)
-plt
+samples.combined <- RunUMAP(samples.combined, reduction = "pca", dims = 1:30)
+samples.combined <- FindNeighbors(samples.combined, reduction = "pca", dims = 1:30)
+samples.combined <- FindClusters(samples.combined)
+```
+
+```{r visualisation, include=TRUE, echo=TRUE, results='hide'}
+p1 <- DimPlot(samples.combined, reduction = "umap", group.by = "state")
+p2 <- DimPlot(samples.combined, reduction = "umap", label = TRUE, repel = TRUE)
+p1 + p2
 ```
 \newpage
-
 ```{r}
-plt <- DimPlot(samples.combined, reduction = "umap", group.by = "state")
-save_plot("../results/RNA/plots/umap_sell.png", plt)
-plt
+FeaturePlot(samples.combined, features = c("Zeb2"), min.cutoff = "q9")
 ```
-\newpage
-
-```{r}
-plt <- FeaturePlot(samples.combined, features = c("Adam17"))
-save_plot("../results/RNA/plots/umap_adam17.png", plt)
-plt
-```
-\newpage
-
-```{r}
-plt <- FeaturePlot(samples.combined, features = c("Klf2"))
-save_plot("../results/RNA/plots/umap_klf2.png", plt)
+## Expression Dot Plot
+```{r dotplot, include=TRUE, echo=TRUE}
+#Idents(samples.combined) <- "state"
+DefaultAssay(samples.combined) <- "RNA"
+genes_of_note <- rev(c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1",
+                       "Mzf1", "Irf1", "Ccr7", "S1pr1", "Cd44", "Ccl5"))
+plt <- DotPlot(samples.combined, features = rev(genes_of_note), dot.scale = 8) +
+  RotatedAxis()
+save_plot("../results/RNA/plots/expression_dotplot.png", plt)
 plt
 ```
 
 ## Expression Violin Plots
-### Sell
+### Edit gene at will
 ```{r violinplot_sell, include=TRUE, echo=TRUE}
-Idents(samples.combined) <- "state"
 plt <- VlnPlot(samples.combined, features = c("Sell"))
-save_plot("../results/RNA/plots/sell_violin.png", plt)
-plt
-```
-
-### Adam17
-
-```{r violinplot_adam17, include=TRUE, echo=TRUE}
-plt <- VlnPlot(samples.combined, features = c("Adam17"))
-save_plot("../results/RNA/plots/adam17_violin.png", plt)
-plt
-```
-
-### Klf2
-
-```{r violinplot_klf2, include=TRUE, echo=TRUE}
-plt <- VlnPlot(samples.combined, features = c("Klf2"))
-save_plot("../results/RNA/plots/adam17_violin.png", plt)
-plt
-```
-\newpage
-
-## Expression Dot Plot
-```{r dotplot, include=TRUE, echo=TRUE}
-genes_of_note <- c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1",
-                   "Mzf1", "Irf1", "Ccr7", "S1pr1", "Cd44")
-plt <- DotPlot(samples.combined, features = rev(genes_of_note), dot.scale = 8) +
-  RotatedAxis()
-save_plot("../results/RNA/plots/expression_dotplot.png", plt)
+save_plot("../results/RNA/plots/exp_vln.png", plt)
 plt
 ```
 
@@ -305,7 +291,6 @@ plt
 
 ## Expression Heatmap
 ```{r heatmap, include=TRUE, echo=TRUE}
-samples.combined <- ScaleData(samples.combined)
 plt <- DoHeatmap(samples.combined, features=genes_of_note)
 save_plot("../results/RNA/plots/expression_heatmap.png", plt)
 plt
@@ -317,74 +302,103 @@ plt
 
 ### Compare expression betwen markers
 Performs a Wilcoxon Rank Sum test to identify differentially expressed genes between a sample and all other cells, for each sample
+```{r}
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+```
 
 ```{r differential_expression, include=FALSE, echo=TRUE, results='hide'}
-Idents(object = samples.combined) <- samples.combined@meta.data$state
-samples.combined.markers <- Seurat::FindAllMarkers(object = samples.combined, 
-                                                   logfc.threshold = 0.01)
+genes <- c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1", "Mzf1",
+           "Irf1", "Ccr7", "S1pr1", "Cd44", "Ccl5")
+res <- diff_exp(sample_a = 0, sample_b = 1) %>% arrange(p_val_adj)
+write_to_xlsx(data = res, filename = "scRNA-seq", genes_of_interest = genes)
 ```
 
+## TODO: Align with deseq script
 ### Annotate DE genes from ensembl
-```{r annotation_biomart, include=FALSE, echo=TRUE}
-ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
-genes <- unique(samples.combined.markers$gene)
-genedesc <- getBM(attributes=c('external_gene_name',
-                               'description',
-                               'chromosome_name',
-                               'start_position',
-                               'end_position'), 
-                  filters = 'external_gene_name', 
-                  values = genes,
-                  mart =ensembl)
+```{r}
+diff_exp <- function(sample_a, sample_b){
+  CD8_difference <- Seurat::FindMarkers(object = samples.combined, 
+                                        logfc.threshold = 0,
+                                        ident.1=sample_a,
+                                        ident.2=sample_b,
+                                        min.pct=0
+                                        )
+  genes <- rownames(CD8_difference)
+  CD8_difference$gene <- genes
+  genedesc <- getBM(attributes=c('external_gene_name',
+                                 'description',
+                                 'gene_biotype',
+                                 'chromosome_name',
+                                 'start_position',
+                                 'end_position'), 
+                    filters = 'external_gene_name', 
+                    values = unique(genes),
+                    mart = ensembl)
 
-samples.combined.markers <- merge(samples.combined.markers, genedesc, all=TRUE,
-                                 by.x = c("gene"), by.y = c("external_gene_name"))
+  CD8_difference <- merge(CD8_difference,
+                          genedesc, all=TRUE,
+                          by.x = c("gene"),
+                          by.y = c("external_gene_name"))
 
-# Reorder columns
-new_order <- c("gene", "cluster", "avg_log2FC", "p_val_adj", "pct.1", "pct.2",
-               "description", "chromosome_name", "start_position", "end_position")
-samples.combined.markers <- samples.combined.markers[new_order]
+  # Reorder & subset columns
+  new_order <- c("gene", "gene_name", "avg_log2FC", "p_val_adj", "pct.1", "pct.2",
+                 "gene_biotype", "description", "chromosome_name",
+                 "start_position", "end_position")
+  CD8_difference <- CD8_difference[new_order]
+  return(CD8_difference) 
+}
 ```
+
+
+## TODO: Align with deseq script
+### Annotate DE genes from ensembl
 
 ### Write to excel spreadsheet 'scRNA-seq-DE'
 Results of differential gene expression test are written to an excel workbook with two sheets.
 Sheet one is all results with genes of particular importance being highlighted in yellow
 Sheet two contains only those genes of particular importance
+
+**avg_log2fc: ** log fold-change in average expression between the two groups
+**pct.1:** Percentage of cells where gene is detected in first group
+**pct.2:** Percentage of cells where gene is detected in second group
+**p_val_adj:** Adjusted p-value using bonferroni correction using all genes in dataset
+
 ```{r write_excel, include=TRUE, echo=TRUE}
-
-excel <- createWorkbook("scRNA-seq-DE")
-addWorksheet(excel, "scRNA-seq")
-writeData(excel, sheet = 1, samples.combined.markers)
-
-# Highlight genes of particular interest
-samples.combined.markers$rownum <- 1:nrow(samples.combined.markers)
-rw <- samples.combined.markers %>% dplyr::filter(gene %in% genes_of_note )
-highlight_style <- openxlsx::createStyle(fgFill = "yellow")
-openxlsx::addStyle(wb = excel, 
-                   sheet = 1, 
-                   style = highlight_style,
-                   rows = (rw$rownum+1),
-                   cols = 1:ncol(rw),
-                   stack = TRUE,
-                   gridExpand = TRUE)
-
-# Create second sheet containing only genes of note
-rw$rownum <- NULL
-rw <- rw %>% arrange(gene)
-addWorksheet(excel, "scRNA-seq-specific")
-writeData(excel, sheet=2, rw)
-
-# Finally write out to file
-saveWorkbook(excel, file = "../results/RNA/scRNA-seq-DE.xlsx", overwrite = TRUE)
-```
-
-
-## Gene Enrichment Analysis
-Find and plot top enriched and top depleted GO terms from EnrichR
-```{r gene_ontology_enrichment_analysis, include=TRUE, echo=FALSE}
-plt <- DEenrichRPlot(samples.combined, enrich.database = "KEGG_2019_Mouse",
-                     max.genes = 300, ident.1 = "N2",
-                     ident.2 = "B2", balanced=TRUE, num.pathway = 15)
-save_plot("../results/RNA/plots/enrichment_analysis.png", plt)
-plt
+write_to_xlsx <- function(data, filename, genes_of_interest){
+  excel <- createWorkbook(filename)
+  addWorksheet(excel, "all_genes")
+  writeData(excel, sheet = 1, data)
+  
+  # Highlight genes of particular interest
+  data$rownum <- 1:nrow(data)
+  rw <- data %>% dplyr::filter(gene %in% genes_of_interest )
+  highlight_style <- openxlsx::createStyle(fgFill = "yellow")
+  openxlsx::addStyle(wb = excel, 
+                     sheet = 1, 
+                     style = highlight_style,
+                     rows = (rw$rownum+1),
+                     cols = 1:ncol(rw),
+                     stack = TRUE,
+                     gridExpand = TRUE)
+  
+  # Create second sheet containing only genes of note
+  rw$rownum <- NULL
+  rw <- rw %>% arrange(gene)
+  addWorksheet(excel, "genes_of_interest")
+  writeData(excel, sheet=2, rw)
+  
+  
+  # Gene Enrichment Analysis
+    # Find and plot top enriched and top depleted GO terms from EnrichR
+  go_terms <- enrichr(genes = unique(res$gene),
+                      databases = "KEGG_2019_Mouse")[["KEGG_2019_Mouse"]] 
+  go_terms <- go_terms[c("Term", "Overlap", "Adjusted.P.value", "Genes")] %>%
+    arrange("Overlap")
+  addWorksheet(excel, "go_terms")
+  writeData(excel, sheet=3, go_terms)
+  
+  # Finally write out to file
+  saveWorkbook(excel, file = paste0("../results/RNA/", filename, ".xlsx"),
+               overwrite = TRUE)
+  }
 ```
