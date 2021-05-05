@@ -2,16 +2,19 @@ import argparse
 import pandas as pd
 import scanpy as sc
 
+# NTH: Log file?
+
 '''
 scRNA-seq analysis of single sample
 '''
 
 # Config variables
-sc.settings.verbosity = 3
+sc.settings.verbosity = 0
 sc.logging.print_header()
 sc.settings.set_figure_params(dpi=80, facecolor='white')
 results_file = None
 show_plots = False
+remove_ribo_genes = False
 root_dir = "C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.UbuntuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict/CaseStudy/data/united/RNA/"
 
 # Entry point
@@ -19,10 +22,12 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--sample', help='Root dir name of sample')
     parser.add_argument('--show', help='Root dir name of sample', default=False)
+    parser.add_argument('--removeRibo', help='Remove ribsomal genes', default=True)
     args = parser.parse_args()
     root_dir += args.sample
     results_file = (args.sample + ".h5ad")
     show_plots = args.show
+    remove_ribo_genes = bool(args.removeRibo)
 
 
 # Read in count matrix
@@ -35,6 +40,10 @@ print(data)
 
 
 # Preprocessing
+
+if remove_ribo_genes:
+    data = data[:, [name for name in data.var_names if not name.startswith('Rp')]] #FIX: Make into regex
+print(data)
 
 # Show genes with highest fraction of counts across all cells
 sc.pl.highest_expr_genes(data, n_top=20, save="highest_expressed_genes.png", show=show_plots)
@@ -88,7 +97,7 @@ sc.pp.scale(data, max_value=10)
 
 # Principal Components Analysis
 # Reduce dimensionality of data to reveal main axes of variation and denoise the data
-sc.tl.pca(data, svd_solver='arpack')
+sc.tl.pca(data, svd_solver='arpack', n_comps=30)
 
 # Scatter plot in PCA coordiantes
 sc.pl.pca(data, save='_pca.png', show=show_plots)
@@ -98,9 +107,9 @@ sc.pl.pca_variance_ratio(data, log=True, save='_pca_variance.png', show=show_plo
 data.write(results_file)
 
 # Computing Neighbourhood Graph
-sc.pp.neighbors(data, n_neighbors=10, n_pcs=40)
+sc.pp.neighbors(data, n_neighbors=15, n_pcs=30)
 # Embed neighbourhood graph in 2 dimensions with UMAP
-sc.tl.umap(data)
+sc.tl.umap(data, min_dist=0.2)
 sc.pl.umap(data, color=["Sell", "Adam17"], save='_sell_adam17_umap.png', show=show_plots)
 
 
@@ -109,18 +118,13 @@ sc.pl.umap(data, color=["Sell", "Adam17"], save='_sell_adam17_umap.png', show=sh
 # sc.pl.umap(data, color=["Sell", "Adam17"], use_raw=False)
 
 # Cluster the neighborhood graph
-sc.tl.leiden(data)
+sc.tl.leiden(data, resolution=0.8)
 # Plot clusters
 sc.pl.umap(data, color=['leiden'], save="_umap_clusters.png", show=show_plots)
-exit(0)
 
 # Finding marker genes
+# Compute ranking for highly differential genes in each cluster
 sc.tl.rank_genes_groups(data, 'leiden', method='wilcoxon')
-sc.pl.rank_genes_groups(data, n_genes=25, sharey=False)
-
-# Top 5 genes per cluster
-pd.DataFrame(data.uns['rank_genes_groups']['names']).head(5)
-
-# Comparison plots
-sc.pl.violin(data, ['Sell'], groupby='leiden')
-sc.pl.dotplot(data, ['Sell', 'Ccr7', 'Cd44', 'Fas', 'Ccl5'], groupby='leiden')
+sc.pl.rank_genes_groups(data, n_genes=25, sharey=False, save='_marker_genes_per_cluster.png', show=show_plots)
+print("Top 15 ranked genes per cluster:")
+print(pd.DataFrame(data.uns['rank_genes_groups']['names']).head(15))
