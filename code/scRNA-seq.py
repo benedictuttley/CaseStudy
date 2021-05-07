@@ -20,27 +20,34 @@ root_dir = "C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubuntuon
 # Entry point
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--sample', help='Root dir name of sample')
-    parser.add_argument('--show', help='Root dir name of sample', default=False)
-    parser.add_argument('--removeRibo', help='Remove ribsomal genes', default=True)
+    parser.add_argument('--samples', help='multipe sample names separated by commas')
+    parser.add_argument('--show', help='Show each plot upon generation', default=False)
+    parser.add_argument('--removeRibo', help='Remove ribsomal genes', default=False)
+    
     args = parser.parse_args()
-    root_dir += args.sample
-    results_file = (args.sample + ".h5ad")
+    sample_names = str(args.samples).split(sep=",")
     show_plots = args.show
     remove_ribo_genes = bool(args.removeRibo)
 
+data = None
+remaining = []
+for i, sample_name in enumerate(sample_names):
+    # Read in count matrix
+    annotated_sample = sc.read_10x_mtx(
+        (root_dir + sample_name + "/filtered_feature_bc_matrix"), # Directory containing feature-barcode .mtx file
+        var_names='gene_symbols', # Use gene symbols for the variable names
+        cache=True) # Create cache file for faster loading of file in the future
+    annotated_sample.var_names_make_unique()
 
-# Read in count matrix
-data = sc.read_10x_mtx(
-    (root_dir + "/filtered_feature_bc_matrix"), # Directory containing feature-barcode .mtx file
-    var_names='gene_symbols', # Use gene symbols for the variable names
-    cache=True) # Create cache file for faster loading of file in the future
-data.var_names_make_unique()
+    if i == 0:
+        data = annotated_sample
+    else:
+        remaining.append(annotated_sample)
+
+data = data.concatenate(*remaining, batch_categories=sample_names)
 print(data)
 
-
 # Preprocessing
-
 if remove_ribo_genes:
     data = data[:, [name for name in data.var_names if not name.startswith('Rp')]] #FIX: Make into regex
 print(data)
@@ -103,15 +110,11 @@ sc.tl.pca(data, svd_solver='arpack', n_comps=30)
 sc.pl.pca(data, save='_pca.png', show=show_plots)
 sc.pl.pca_variance_ratio(data, log=True, save='_pca_variance.png', show=show_plots) # See contribution of each PC to toal variance
 
-# Save result
-data.write(results_file)
-
 # Computing Neighbourhood Graph
-sc.pp.neighbors(data, n_neighbors=15, n_pcs=30)
+sc.pp.neighbors(data, n_neighbors=10, n_pcs=30)
 # Embed neighbourhood graph in 2 dimensions with UMAP
-sc.tl.umap(data, min_dist=0.2)
+sc.tl.umap(data)
 sc.pl.umap(data, color=["Sell", "Adam17"], save='_sell_adam17_umap.png', show=show_plots)
-
 
 # Previous plot shows raw gene expression (normalised, logarithmised and uncorrected)
 # Instead the scaled and corrected gene expression can be plotted
@@ -121,6 +124,8 @@ sc.pl.umap(data, color=["Sell", "Adam17"], save='_sell_adam17_umap.png', show=sh
 sc.tl.leiden(data, resolution=0.8)
 # Plot clusters
 sc.pl.umap(data, color=['leiden'], save="_umap_clusters.png", show=show_plots)
+if len(sample_names) > 1:
+    sc.pl.umap(data, color=['batch'], save="_umap_batch.png", show=show_plots)
 
 # Finding marker genes
 # Compute ranking for highly differential genes in each cluster
