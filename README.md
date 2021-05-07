@@ -11,7 +11,7 @@ Visualisation follows, with PCA dimensionality reduction and UMAP plots. Finally
 ## Getting Started
 This is an example of running the analysis
 
-## Install ScanPy
+### Install ScanPy
 
 ```python
 pip install scanpy
