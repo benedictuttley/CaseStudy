@@ -55,6 +55,7 @@ project
 * openxlsx
 * patchwork
 * enrichR
+* reshape2
 
 ```{r setup, include=FALSE, echo=TRUE, results='hide'}
 knitr::opts_chunk$set(echo = TRUE)
@@ -64,67 +65,52 @@ setwd(paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited.Ubun",
 
 # Load Dependencies
 packages <- c("tidyverse",  "Seurat", "cowplot", "biomaRt", "openxlsx",
-              "patchwork", "enrichR")
+              "patchwork", "enrichR", "reshape2")
 #install.packages(packages)
 lapply(packages, library, character.only = TRUE)
 ```
 
-## Data Import
-Uncomment following code block to analyse the DIV0-4 samples
-```{r data_import_a,  include=TRUE, echo=TRUE, results='hide'}
-# data_folder <- "../data/united/RNA/"
-# 
-# div_0.data <-  Read10X(data.dir = paste0(data_folder,
-#                                          "X31-OVA-D0/filtered_feature_bc_matrix"))
-# div_1.data <-  Read10X(data.dir = paste0(data_folder,
-#                                          "X31-OVA-D1/filtered_feature_bc_matrix"))
-# div_2.data <-  Read10X(data.dir = paste0(data_folder,
-#                                          "X31-OVA-D2/filtered_feature_bc_matrix"))
-# div_3.data <-  Read10X(data.dir = paste0(data_folder,
-#                                          "X31-OVA-D3/filtered_feature_bc_matrix"))
-# div_4.data <-  Read10X(data.dir = paste0(data_folder,
-#                                          "X31-OVA-D4/filtered_feature_bc_matrix"))
-# samples <- c(div_0.data, div_1.data, div_2.data, div_3.data, div_4.data)
-# names <- c("DIV0", "DIV1", "DIV2", "DIV3", "DIV4")
+```{r settings}
+root_dir <- paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited",
+                  ".UbuntuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict",
+                  "/CaseStudy/data/united/RNA/")
+sample_names <- c('X31-OVA-D0', 'X31-OVA-D1', 'X31-OVA-D2', 'X31-OVA-D3', 'X31-OVA-D4')
+remove_ribo <-  TRUE
+remove_mito <- TRUE
 ```
 
+## Data Import
+```{r data_import,  include=TRUE, echo=TRUE, results='hide'}
+samples <- c()
 
-Uncomment following code block to analyse the N2, B2, E2, M2 samples
-```{r data_import_b, include=TRUE, echo=TRUE}
-data_folder <- "../data/united/RNA/"
-N2.data <- Read10X(data.dir = paste0(data_folder,
-                                     "N2/filtered_feature_bc_matrix"))
-B2.data <- Read10X(data.dir = paste0(data_folder,
-                                     "B2/filtered_feature_bc_matrix"))
-E2.data <- Read10X(data.dir = paste0(data_folder,
-                                     "E2/filtered_feature_bc_matrix"))
-M2.data <- Read10X(data.dir = paste0(data_folder,
-                                     "M2/filtered_feature_bc_matrix"))
-samples <- c(N2.data, E2.data, B2.data, M2.data)
-names <- c("N2","E2", "B2", "M2")
+for(sample_name in sample_names){
+  sample <- Read10X(data.dir = paste0(root_dir, sample_name, '/filtered_feature_bc_matrix'))
+  samples <- append(samples, sample)
+}
 ```
 
 Number of cells per sample pre-QC
 ```{r pre_qc_cell_counts}
 for(i in seq_along(samples)){
   num_cells <- ncol(samples[[i]])
-  print(paste0(names[[i]],": ", num_cells))
+  print(paste0(sample_names[[i]],": ", num_cells))
 }
 ```
 
 ## Create Seurat objects from input data
 ```{r create_seurat_objects, include=TRUE, echo=TRUE}
 sample_objs <- c()
-idx = 1
-for(sample in samples){
- sample <- CreateSeuratObject(counts = sample,
-                     project = "scRNA-seq",
-                     min.cells = 3,
-                     min.features = 200)
- sample@meta.data$state <- names[idx]
- sample_objs <- append(sample_objs, sample)
- idx = idx + 1
-}
+for(i in seq_along(samples)){
+  sample <- CreateSeuratObject(counts = samples[[i]],
+                               project = "scRNA-seq",
+                               min.cells = 3,
+                               min.features = 200)
+  sample@meta.data$state <- sample_names[[i]]
+  sample_objs <- append(sample_objs, sample)
+  
+  num_cells <- ncol(samples[[i]])
+  print(paste0(sample_names[[i]],": ", num_cells))
+ }
 ```
 
 \newpage
@@ -146,10 +132,12 @@ for(seurat_obj in sample_objs){
   total_counts_per_cell <- colSums(seurat_obj@assays$RNA@counts)
   
   mito.genes <- rownames(seurat_obj)[grep("^mt-", rownames(seurat_obj))]
-  seurat_obj$percent.mito <- (colSums(seurat_obj@assays$RNA@counts[mito.genes, ])/total_counts_per_cell)*100
+  seurat_obj$percent.mito <- (colSums(
+    seurat_obj@assays$RNA@counts[mito.genes, ])/total_counts_per_cell)*100
   
   ribo.genes <- rownames(seurat_obj)[grep("^Rp[sl]", rownames(seurat_obj))]
-  seurat_obj$percent.ribo <- (colSums(seurat_obj@assays$RNA@counts[ribo.genes, ])/total_counts_per_cell)*100
+  seurat_obj$percent.ribo <- (colSums(
+    seurat_obj@assays$RNA@counts[ribo.genes, ])/total_counts_per_cell)*100
   
   temp <- append(temp, seurat_obj)
 }
@@ -161,8 +149,7 @@ rm(temp)
 ```{r plot_qc_metrics, include=TRUE}
 # Temp merge for plot purposes only
 samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1],
-                         add.cell.ids =names, project = "scRNA-seq")
-
+                          add.cell.ids =sample_names, project = "scRNA-seq")
 plt_pct_mito <- VlnPlot(object = samples.combined,
                         features = c("percent.mito"),
                         group.by = "state") + labs(title = "% Mitochondrial Reads")
@@ -202,9 +189,12 @@ rm(temp)
 
 ## Filter cells based on QC metrics
 ```{r filter_on_qc_metrics, echo=FALSE}
+# Set cutoffs based on QC plots
+min_features <- 6500
+max_mito <- 5
+
 sample_objs <- lapply(X = sample_objs, FUN = function(x) {
-  x <- subset(x = x,
-              subset = nFeature_RNA > 250 & nFeature_RNA < 2500 & percent.mito < 4 )
+  x <- subset(x = x, subset = nFeature_RNA < min_features & percent.mito < max_mito )
 })
 ```
 
@@ -212,8 +202,14 @@ Number of cells per sample post-QC
 ```{r post_qc_cell_counts}
 for(i in seq_along(sample_objs)){
   num_cells <- ncol(sample_objs[[i]])
-  print(paste0(names[[i]],": ", num_cells))
+  print(paste0(sample_names[[i]],": ", num_cells))
 }
+```
+
+```{r remove_unusable_cells_samples}
+samples_to_remove <- c('X31-OVA-D1') # Specify any samples to be removed
+idxs_to_remove <- match(samples_to_remove, sample_names)
+sample_objs <- sample_objs[-idxs_to_remove]
 ```
 
 ## Normalize Samples independently
@@ -226,20 +222,10 @@ sample_objs <- lapply(X = sample_objs, FUN = function(x) {
 })
 ```
 
-## Option 1: Merge Samples
-```{r merge_objects, include=TRUE, echo=TRUE}
-samples.combined <- merge(sample_objs[[1]], y = sample_objs[-1],
-                         add.cell.ids =names, project = "scRNA-seq")
-samples.combined <- FindVariableFeatures(samples.combined,
-                                         selection.method = "vst",
-                                         nfeatures = 2000)
-```
-
-## Option 2: Integrate Samples
-```{r integrate_objects, include=TRUE, echo=TRUE}
-#features <- SelectIntegrationFeatures(object.list = sample_objs)
-#anchors <- FindIntegrationAnchors(object.list = sample_objs, anchor.features = features)
-samples.combined <- IntegrateData(anchorset = anchors)
+## Integrate Samples
+```{r integrate_objects, echo=TRUE, results='hide'}
+anchors <- FindIntegrationAnchors(object.list = sample_objs, dims = 1:20)
+samples.combined <- IntegrateData(anchorset = anchors, dims = 1:20)
 DefaultAssay(samples.combined) <- "integrated"
 ```
 
@@ -248,72 +234,45 @@ Pre-processing step before dimensional reduction is performed
 * Expression of each gene shifted to give mean expression of 0 across cells
 * Expression of each gene scaled to give a variance of 1 across cells
   * Prevents domination from highly-expressed genes
-```{r include=TRUE, include=FALSE, echo=TRUE, results='hide'}
+```{r echo=TRUE, results='hide'}
 samples.combined <- ScaleData(samples.combined, verbose = FALSE)
-samples.combined <- RunPCA(samples.combined, npcs = 50, verbose = FALSE)
+samples.combined <- RunPCA(samples.combined, npcs = 30, verbose = FALSE)
 ```
-```{r}
+
+```{r echo=TRUE, results='hide'}
 samples.combined <- RunUMAP(samples.combined, reduction = "pca", dims = 1:30)
 samples.combined <- FindNeighbors(samples.combined, reduction = "pca", dims = 1:30)
 samples.combined <- FindClusters(samples.combined)
 ```
 
 ```{r visualisation, include=TRUE, echo=TRUE, results='hide'}
-p1 <- DimPlot(samples.combined, reduction = "umap", group.by = "state")
-p2 <- DimPlot(samples.combined, reduction = "umap", label = TRUE, repel = TRUE)
-p1 + p2
+plt_umap <- DimPlot(samples.combined, reduction = "umap")
+save_plot("umap_clusters.png", plt_umap)
+plt_pca <- DimPlot(samples.combined, reduction = "pca")
+save_plot("umap_clusters.png", plt_pca)
+plt_umap
+plt_pca
 ```
-\newpage
+
 ```{r}
-FeaturePlot(samples.combined, features = c("Zeb2"), min.cutoff = "q9")
-```
-## Expression Dot Plot
-```{r dotplot, include=TRUE, echo=TRUE}
-#Idents(samples.combined) <- "state"
+genes_to_plot <- c('Sell')
+
 DefaultAssay(samples.combined) <- "RNA"
-genes_of_note <- rev(c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1",
-                       "Mzf1", "Irf1", "Ccr7", "S1pr1", "Cd44", "Ccl5"))
-plt <- DotPlot(samples.combined, features = rev(genes_of_note), dot.scale = 8) +
-  RotatedAxis()
-save_plot("../results/RNA/plots/expression_dotplot.png", plt)
+plt <- FeaturePlot(samples.combined, features = genes_to_plot)
+save_plot("genes_umap.png", plt)
 plt
-```
 
-## Expression Violin Plots
-### Edit gene at will
-```{r violinplot_sell, include=TRUE, echo=TRUE}
-plt <- VlnPlot(samples.combined, features = c("Sell"))
-save_plot("../results/RNA/plots/exp_vln.png", plt)
-plt
-```
-
-\newpage
-
-## Expression Heatmap
-```{r heatmap, include=TRUE, echo=TRUE}
-plt <- DoHeatmap(samples.combined, features=genes_of_note)
-save_plot("../results/RNA/plots/expression_heatmap.png", plt)
-plt
 ```
 
 \newpage
 
 ## Perform Differential Expression (DE) Testing
-
 ### Compare expression betwen markers
 Performs a Wilcoxon Rank Sum test to identify differentially expressed genes between a sample and all other cells, for each sample
 ```{r}
 ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
 ```
 
-```{r differential_expression, include=FALSE, echo=TRUE, results='hide'}
-genes <- c("Sell", "Adam17", "Klf2", "Lef1", "Foxo1", "Sp1", "Ets1", "Mzf1",
-           "Irf1", "Ccr7", "S1pr1", "Cd44", "Ccl5")
-res <- diff_exp(sample_a = 0, sample_b = 1) %>% arrange(p_val_adj)
-write_to_xlsx(data = res, filename = "scRNA-seq", genes_of_interest = genes)
-```
-
-## TODO: Align with deseq script
 ### Annotate DE genes from ensembl
 ```{r}
 diff_exp <- function(sample_a, sample_b){
@@ -341,17 +300,13 @@ diff_exp <- function(sample_a, sample_b){
                           by.y = c("external_gene_name"))
 
   # Reorder & subset columns
-  new_order <- c("gene", "gene_name", "avg_log2FC", "p_val_adj", "pct.1", "pct.2",
+  new_order <- c("gene", "avg_log2FC", "p_val_adj", "pct.1", "pct.2",
                  "gene_biotype", "description", "chromosome_name",
                  "start_position", "end_position")
   CD8_difference <- CD8_difference[new_order]
   return(CD8_difference) 
 }
 ```
-
-
-## TODO: Align with deseq script
-### Annotate DE genes from ensembl
 
 ### Write to excel spreadsheet 'scRNA-seq-DE'
 Results of differential gene expression test are written to an excel workbook with two sheets.
@@ -401,4 +356,63 @@ write_to_xlsx <- function(data, filename, genes_of_interest){
   saveWorkbook(excel, file = paste0("../results/RNA/", filename, ".xlsx"),
                overwrite = TRUE)
   }
+```
+
+```{r}
+genes_to_show <- c('Sell', 'Klf2', 'Ccr7') # List of genes to plot correlation for
+
+samples.combined <- ScaleData(samples.combined)
+matrix <- samples.combined@assays[["RNA"]]@scale.data
+matrix_mod <- as.matrix(matrix) 
+
+tmp <- genes_to_show
+matrix_mod <- matrix_mod[genes_to_show, ]
+
+for(gene in genes_to_show){
+  temp <-as.numeric(matrix_mod[gene,])
+  correlations <- apply(matrix_mod,1,function(x){cor(temp,x)})
+  tmp <- rbind(tmp, correlations)
+}
+
+colnames(tmp) <- genes_to_show
+cormat <- tmp[-1,]
+rownames(cormat) <- genes_to_show
+melted_cormat <- melt(cormat)
+melted_cormat$value <- as.numeric(melted_cormat$value)
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + geom_tile()
+
+# Get lower triangle of the correlation matrix
+get_lower_tri <- function(cormat){
+  cormat[upper.tri(cormat)] <- NA
+  return(cormat)
+  }
+
+# Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+  cormat[lower.tri(cormat)]<- NA
+  return(cormat)
+  }
+
+upper_tri <- get_upper_tri(cormat)
+  
+# Melt the correlation matrix
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+melted_cormat$value <- as.numeric(melted_cormat$value)
+
+# Plot Heatmap
+plt <- ggplot(data = melted_cormat, aes(Var2, Var1, fill = value)) + 
+  geom_tile(color = "white") + 
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0,
+                       limit = c(-1,1), space = "Lab", name="Pearson\nCorrelation") + 
+  theme_minimal() + 
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(), 
+        axis.ticks = element_blank(), 
+        axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1)) + 
+  coord_fixed()
+save_plot("correlation.png", plt)
+plt
 ```
