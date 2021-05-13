@@ -29,7 +29,6 @@ samples and are added to the workbook as a new sheet.
 | remove_mito   | Remove all mitochondiral genes       | False
 
 <br>
-<br>
 
 # Python Single Cell RNA-seq Analysis
 
