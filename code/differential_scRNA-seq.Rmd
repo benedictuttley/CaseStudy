@@ -1,7 +1,7 @@
 ---
 title: "scRNA-seq Analysis"
 author: "Benedict"
-date: "03/03/2021"
+date: "17/05/2021"
 output:
   pdf_document:
     latex_engine: xelatex
@@ -75,8 +75,8 @@ root_dir <- paste0("C:/Users/bened/AppData/Local/Packages/CanonicalGroupLimited"
                   ".UbuntuonWindows_79rhkp1fndgsc/LocalState/rootfs/home/benedict",
                   "/CaseStudy/data/united/RNA/")
 sample_names <- c('X31-OVA-D0', 'X31-OVA-D1', 'X31-OVA-D2', 'X31-OVA-D3', 'X31-OVA-D4')
-remove_ribo <-  TRUE
-remove_mito <- TRUE
+remove_ribo <-  FALSE
+remove_mito <- FALSE
 ```
 
 ## Data Import
